@@ -21,7 +21,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private readonly GroqService _groqService;
         private CancellationTokenSource _cts;
         private bool _limitToFive = true;   // 🔥 mude para false quando quiser liberar geral
-        private bool _currentExecutionUsesFile = false;
+        private bool _currentExecutionUsesFile = true;
 
         // ✅ NOVO: Lista para rastrear falhas de scraping por domínio
         private readonly List<string> _failedDomains = new List<string>();
@@ -210,7 +210,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private async Task ProcessUrlsAsync(List<string> urls, int parallelism, CancellationToken ct)
         {
-            LogService.Info("METHOD v1: ProcessUrlsAsync");
+            LogService.Info("METHOD v2: ProcessUrlsAsync");
 
             using (var semaphore = new SemaphoreSlim(parallelism))
             {
@@ -222,26 +222,41 @@ namespace NewsImpactRanker.WinForms.Forms
                     {
                         if (ct.IsCancellationRequested) return;
 
+                        // 1) Processa a URL e retorna o item (SEM adicionar em _allNewsScores lá dentro)
                         var item = await ProcessSingleUrlAsync(url);
 
-                        if (item != null)
+                        if (item == null)
+                            return;
+
+                        bool added = false;
+
+                        // 2) Armazena uma única vez (evita duplicação)
+                        lock (_scoresLock)
                         {
-                            lock (_scoresLock)
+                            if (!_allNewsScores.Any(n => n.Url == item.Url))
                             {
-                                // evitar duplicação
-                                if (!_allNewsScores.Any(n => n.Url == item.Url))
-                                {
-                                    item.SourceOrder = _allNewsScores.Count;
-                                    _allNewsScores.Add(item);
-                                }
+                                item.SourceOrder = _allNewsScores.Count;
+                                _allNewsScores.Add(item);
+                                added = true;
                             }
-
-                            LogService.Info($"Notícia armazenada para análise: {item.Url}");
-
-                            // atualizar ranking parcial
-                            var partialResults = SelectBestNewsPerTopic();
-                            DisplayTopicResults(partialResults);
                         }
+
+                        if (added)
+                            LogService.Info($"Notícia armazenada para análise: {item.Url}");
+                        else
+                            LogService.Warn($"DEBUG: duplicata ignorada {item.Url}");
+
+                        // 3) Atualiza ranking parcial (uma única vez por URL processada)
+                        var partialResults = SelectBestNewsPerTopic();
+                        DisplayTopicResults(partialResults);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // ok, cancelado
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Error($"Erro ao processar URL {url} dentro de ProcessUrlsAsync", ex);
                     }
                     finally
                     {
