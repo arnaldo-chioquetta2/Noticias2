@@ -110,53 +110,33 @@ namespace NewsImpactRanker.WinForms.Services
             };
         }
 
-        private async Task<string> GetHtmlWithRetry(string url, int retries = 2)
+        private async Task<string> GetHtmlWithRetry(string url)
         {
-            for (int i = 0; i <= retries; i++)
+            int maxAttempts = 3;
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 try
                 {
-                    var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    var response = await _httpClient.GetAsync(url);
 
-                    request.Headers.Add("User-Agent", _userAgents[new Random().Next(_userAgents.Count)]);
-                    request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-                    request.Headers.Add("Accept-Language", "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7");
-
-                    // ✅ NÃO pedir br (Brotli) no .NET Framework
-                    request.Headers.Remove("Accept-Encoding");
-                    request.Headers.Add("Accept-Encoding", "gzip, deflate");
-
-                    request.Headers.Add("Connection", "keep-alive");
-                    request.Headers.Add("Upgrade-Insecure-Requests", "1");
-                    request.Headers.Add("Cache-Control", "max-age=0");
-
-                    var response = await _httpClient.SendAsync(request);
-
-                    if (response.IsSuccessStatusCode)
+                    if (!response.IsSuccessStatusCode)
                     {
-                        // ✅ Agora que o handler descomprime gzip/deflate, podemos ler como string
-                        string htmlContent = await response.Content.ReadAsStringAsync();
-
-                        // ✅ Remover BOM/invisíveis
-                        htmlContent = (htmlContent ?? "")
-                            .TrimStart('\uFEFF', '\u200B', '\u200C', '\u200D', '\u00A0')
-                            .Trim();
-
-                        return htmlContent;
+                        LogService.Warn($"HTTP {(int)response.StatusCode} para {url}");
+                        return null;
                     }
 
-                    if (i < retries)
-                    {
-                        int delay = (i + 1) * 2000;
-                        LogService.Warn($"Retry {i + 1} para {url} após {delay}ms (Status: {response.StatusCode})");
-                        await Task.Delay(delay);
-                    }
+                    return await response.Content.ReadAsStringAsync();
                 }
                 catch (Exception ex)
                 {
-                    if (i == retries) throw;
-                    LogService.Warn($"Erro no scraping (tentativa {i + 1}): {ex.Message}");
-                    await Task.Delay(1000);
+                    LogService.Warn($"Tentativa {attempt}/{maxAttempts} falhou para {url}: {ex.Message}");
+
+                    if (attempt == maxAttempts)
+                        return null;
+
+                    int delay = (int)Math.Pow(2, attempt) * 1000;
+                    await Task.Delay(delay);
                 }
             }
 

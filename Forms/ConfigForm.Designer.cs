@@ -24,6 +24,9 @@ namespace NewsImpactRanker.WinForms.Forms
             this.label3 = new System.Windows.Forms.Label();
             this.txtNewsFile = new System.Windows.Forms.TextBox();
             this.btnBrowse = new System.Windows.Forms.Button();
+            this.label4 = new System.Windows.Forms.Label();
+            this.txtPromptFile = new System.Windows.Forms.TextBox();
+            this.btnBrowsePrompt = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // label1
@@ -44,7 +47,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnSave
             // 
-            this.btnSave.Location = new System.Drawing.Point(230, 165);
+            this.btnSave.Location = new System.Drawing.Point(233, 217);
             this.btnSave.Name = "btnSave";
             this.btnSave.Size = new System.Drawing.Size(75, 23);
             this.btnSave.TabIndex = 2;
@@ -55,7 +58,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // btnCancel
             // 
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(315, 165);
+            this.btnCancel.Location = new System.Drawing.Point(318, 217);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(75, 23);
             this.btnCancel.TabIndex = 3;
@@ -103,13 +106,41 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btnBrowse.TabIndex = 8;
             this.btnBrowse.Text = "Selecionar";
             // 
+            // label4
+            // 
+            this.label4.AutoSize = true;
+            this.label4.Location = new System.Drawing.Point(12, 160);
+            this.label4.Name = "label4";
+            this.label4.Size = new System.Drawing.Size(40, 13);
+            this.label4.TabIndex = 9;
+            this.label4.Text = "Prompt";
+            // 
+            // txtPromptFile
+            // 
+            this.txtPromptFile.Location = new System.Drawing.Point(12, 176);
+            this.txtPromptFile.Name = "txtPromptFile";
+            this.txtPromptFile.Size = new System.Drawing.Size(300, 20);
+            this.txtPromptFile.TabIndex = 10;
+            // 
+            // btnBrowsePrompt
+            // 
+            this.btnBrowsePrompt.Location = new System.Drawing.Point(318, 174);
+            this.btnBrowsePrompt.Name = "btnBrowsePrompt";
+            this.btnBrowsePrompt.Size = new System.Drawing.Size(75, 23);
+            this.btnBrowsePrompt.TabIndex = 11;
+            this.btnBrowsePrompt.Text = "Selecionar";
+            this.btnBrowsePrompt.Click += new System.EventHandler(this.btnBrowsePrompt_Click);
+            // 
             // ConfigForm
             // 
             this.AcceptButton = this.btnSave;
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(420, 210);
+            this.ClientSize = new System.Drawing.Size(420, 277);
+            this.Controls.Add(this.label4);
+            this.Controls.Add(this.txtPromptFile);
+            this.Controls.Add(this.btnBrowsePrompt);
             this.Controls.Add(this.txtModel);
             this.Controls.Add(this.label2);
             this.Controls.Add(this.btnCancel);
@@ -141,5 +172,8 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.Label label3;
         private System.Windows.Forms.TextBox txtNewsFile;
         private System.Windows.Forms.Button btnBrowse;
+        private System.Windows.Forms.Label label4;
+        private System.Windows.Forms.TextBox txtPromptFile;
+        private System.Windows.Forms.Button btnBrowsePrompt;
     }
 }

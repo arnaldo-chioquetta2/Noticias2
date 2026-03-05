@@ -19,6 +19,7 @@ namespace NewsImpactRanker.WinForms.Forms
             txtApiKey.Text = config.AiApiKey;
             txtModel.Text = config.AiModel ?? "mixtral-8x7b-32768";
             txtNewsFile.Text = config.NewsFilePath ?? "";
+            txtPromptFile.Text = config.PromptFilePath;
         }
 
         private void btnSave_Click(object sender, EventArgs e)
@@ -40,6 +41,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 : txtModel.Text.Trim();
 
             config.NewsFilePath = txtNewsFile.Text?.Trim();
+
+            config.PromptFilePath = txtPromptFile.Text.Trim();
 
             StorageManager.SaveConfig(config);
 
@@ -63,6 +66,19 @@ namespace NewsImpactRanker.WinForms.Forms
                 if (dialog.ShowDialog() == DialogResult.OK)
                 {
                     txtNewsFile.Text = dialog.FileName;
+                }
+            }
+        }
+
+        private void btnBrowsePrompt_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Filter = "Arquivos de texto (*.txt)|*.txt|Todos (*.*)|*.*";
+
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    txtPromptFile.Text = dialog.FileName;
                 }
             }
         }

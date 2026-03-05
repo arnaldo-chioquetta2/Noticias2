@@ -1,3 +1,6 @@
+using System;
+using System.Windows.Forms;
+
 namespace NewsImpactRanker.WinForms.Forms
 {
     partial class MainForm
@@ -34,8 +37,13 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colDate = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.btnOpenReport = new System.Windows.Forms.Button();
             this.btnOpenLog = new System.Windows.Forms.Button();
+            this.dgvTopicResults = new System.Windows.Forms.DataGridView();
+            this.colTopic = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colTopicUrl = new System.Windows.Forms.DataGridViewLinkColumn();
+            this.colTopicScore = new System.Windows.Forms.DataGridViewTextBoxColumn();
             ((System.ComponentModel.ISupportInitialize)(this.nudParallelism)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).BeginInit();
             this.SuspendLayout();
             // 
             // label1
@@ -55,7 +63,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.txtUrls.Multiline = true;
             this.txtUrls.Name = "txtUrls";
             this.txtUrls.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.txtUrls.Size = new System.Drawing.Size(776, 100);
+            this.txtUrls.Size = new System.Drawing.Size(893, 100);
             this.txtUrls.TabIndex = 1;
             // 
             // label2
@@ -102,7 +110,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // btnConfig
             // 
             this.btnConfig.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnConfig.Location = new System.Drawing.Point(688, 129);
+            this.btnConfig.Location = new System.Drawing.Point(805, 129);
             this.btnConfig.Name = "btnConfig";
             this.btnConfig.Size = new System.Drawing.Size(100, 23);
             this.btnConfig.TabIndex = 5;
@@ -116,14 +124,14 @@ namespace NewsImpactRanker.WinForms.Forms
             | System.Windows.Forms.AnchorStyles.Right)));
             this.progressBar.Location = new System.Drawing.Point(12, 158);
             this.progressBar.Name = "progressBar";
-            this.progressBar.Size = new System.Drawing.Size(737, 23);
+            this.progressBar.Size = new System.Drawing.Size(854, 23);
             this.progressBar.TabIndex = 6;
             // 
             // lblProgress
             // 
             this.lblProgress.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lblProgress.AutoSize = true;
-            this.lblProgress.Location = new System.Drawing.Point(755, 168);
+            this.lblProgress.Location = new System.Drawing.Point(872, 168);
             this.lblProgress.Name = "lblProgress";
             this.lblProgress.Size = new System.Drawing.Size(24, 13);
             this.lblProgress.TabIndex = 7;
@@ -149,8 +157,9 @@ namespace NewsImpactRanker.WinForms.Forms
             this.dgvResults.Name = "dgvResults";
             this.dgvResults.ReadOnly = true;
             this.dgvResults.RowHeadersVisible = false;
-            this.dgvResults.Size = new System.Drawing.Size(776, 251);
+            this.dgvResults.Size = new System.Drawing.Size(893, 251);
             this.dgvResults.TabIndex = 8;
+            this.dgvResults.Visible = false;
             this.dgvResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dgvResults_CellContentClick);
             // 
             // colImpact
@@ -203,7 +212,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnOpenReport
             // 
-            this.btnOpenReport.Location = new System.Drawing.Point(532, 129);
+            this.btnOpenReport.Location = new System.Drawing.Point(649, 128);
             this.btnOpenReport.Name = "btnOpenReport";
             this.btnOpenReport.Size = new System.Drawing.Size(150, 25);
             this.btnOpenReport.TabIndex = 9;
@@ -213,7 +222,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnOpenLog
             // 
-            this.btnOpenLog.Location = new System.Drawing.Point(376, 129);
+            this.btnOpenLog.Location = new System.Drawing.Point(493, 128);
             this.btnOpenLog.Name = "btnOpenLog";
             this.btnOpenLog.Size = new System.Drawing.Size(150, 25);
             this.btnOpenLog.TabIndex = 10;
@@ -221,11 +230,51 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btnOpenLog.UseVisualStyleBackColor = true;
             this.btnOpenLog.Click += new System.EventHandler(this.btnOpenLog_Click);
             // 
+            // dgvTopicResults
+            // 
+            this.dgvTopicResults.AllowUserToAddRows = false;
+            this.dgvTopicResults.AllowUserToDeleteRows = false;
+            this.dgvTopicResults.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
+            | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.dgvTopicResults.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
+            this.colTopic,
+            this.colTopicUrl,
+            this.colTopicScore});
+            this.dgvTopicResults.Location = new System.Drawing.Point(12, 187);
+            this.dgvTopicResults.Name = "dgvTopicResults";
+            this.dgvTopicResults.ReadOnly = true;
+            this.dgvTopicResults.RowHeadersVisible = false;
+            this.dgvTopicResults.Size = new System.Drawing.Size(893, 251);
+            this.dgvTopicResults.TabIndex = 999;
+            this.dgvTopicResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dgvTopicResults_CellContentClick);
+            // 
+            // colTopic
+            // 
+            this.colTopic.HeaderText = "Assunto";
+            this.colTopic.Name = "colTopic";
+            this.colTopic.ReadOnly = true;
+            this.colTopic.Width = 220;
+            // 
+            // colTopicUrl
+            // 
+            this.colTopicUrl.HeaderText = "URL";
+            this.colTopicUrl.Name = "colTopicUrl";
+            this.colTopicUrl.ReadOnly = true;
+            this.colTopicUrl.Width = 560;
+            // 
+            // colTopicScore
+            // 
+            this.colTopicScore.HeaderText = "Score";
+            this.colTopicScore.Name = "colTopicScore";
+            this.colTopicScore.ReadOnly = true;
+            this.colTopicScore.Width = 80;
+            // 
             // MainForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(800, 450);
+            this.ClientSize = new System.Drawing.Size(917, 450);
             this.Controls.Add(this.btnOpenLog);
             this.Controls.Add(this.btnOpenReport);
             this.Controls.Add(this.dgvResults);
@@ -237,12 +286,14 @@ namespace NewsImpactRanker.WinForms.Forms
             this.Controls.Add(this.label2);
             this.Controls.Add(this.txtUrls);
             this.Controls.Add(this.label1);
+            this.Controls.Add(this.dgvTopicResults);
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "NewsImpactRanker - Classificador de Impacto de Notícias";
             ((System.ComponentModel.ISupportInitialize)(this.nudParallelism)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -266,5 +317,10 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.DataGridViewTextBoxColumn colDate;
         private System.Windows.Forms.Button btnOpenReport;
         private System.Windows.Forms.Button btnOpenLog;
+
+        private System.Windows.Forms.DataGridView dgvTopicResults;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colTopic;
+        private System.Windows.Forms.DataGridViewLinkColumn colTopicUrl;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colTopicScore;
     }
 }

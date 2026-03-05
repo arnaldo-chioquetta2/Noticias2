@@ -71,5 +71,19 @@ namespace NewsImpactRanker.WinForms.Services
         {
             return _logFilePath;
         }
+
+        public static void ResetLog()
+        {
+            try
+            {
+                if (File.Exists(_logFilePath))
+                    File.Delete(_logFilePath);
+            }
+            catch
+            {
+                // evitar crash por log
+            }
+        }
+
     }
 }

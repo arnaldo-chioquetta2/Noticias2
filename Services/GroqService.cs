@@ -9,6 +9,8 @@ using System.Threading.Tasks;
 using System.Net.Http.Headers;
 using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Storage;
+using System.IO;
+using System.Collections.Generic;
 
 namespace NewsImpactRanker.WinForms.Services
 {
@@ -21,6 +23,10 @@ namespace NewsImpactRanker.WinForms.Services
         private static int _totalTokensExecution = 0;
         private static int _totalRequestsExecution = 0;
         private string _lastRawResponse;
+
+        private readonly object _newsScoresLock = new object();
+        private readonly List<NewsScoresItem> _allNewsScores = new List<NewsScoresItem>();
+
         private static readonly SemaphoreSlim _rateLimiter = new SemaphoreSlim(2, 2);
 
         private const int MAX_TEXT_LENGTH = 3000;
@@ -40,10 +46,14 @@ namespace NewsImpactRanker.WinForms.Services
             _config = StorageManager.LoadConfig();
         }
 
-        public async Task<GeminiResponse> ClassifyNewsAsync(string text)
+        public async Task<TopicScoresResponse> ClassifyNewsAsync(string text)
         {
+            LogService.Info("METHOD v3: ClassifyNewsAsync");
+
             LogService.Info($"🧾 Texto p/ IA - len={text?.Length ?? 0}");
-            LogService.Info("🧾 Texto p/ IA - início: " + (text ?? "").Substring(0, Math.Min(250, (text ?? "").Length)));
+            LogService.Info(" ");
+            LogService.Info(text ?? "");
+            LogService.Info(" ");
 
             if (string.IsNullOrWhiteSpace(_config.AiApiKey))
                 throw new Exception("API Key da Groq não configurada.");
@@ -53,222 +63,248 @@ namespace NewsImpactRanker.WinForms.Services
             if (text.Length > 4000)
                 text = text.Substring(0, 4000);
 
+            if (string.IsNullOrWhiteSpace(_config.PromptFilePath) || !File.Exists(_config.PromptFilePath))
+                throw new Exception("Arquivo de prompt não configurado.");
+
+            string systemPrompt = File.ReadAllText(_config.PromptFilePath);
+
             string url = "https://api.groq.com/openai/v1/chat/completions";
 
             var payload = new
             {
-                model = string.IsNullOrWhiteSpace(_config.AiModel) ? "llama-3.1-8b-instant" : _config.AiModel,
+                model = string.IsNullOrWhiteSpace(_config.AiModel)
+                    ? "llama-3.1-8b-instant"
+                    : _config.AiModel,
+
                 messages = new[]
                 {
-            new {
+            new
+            {
                 role = "system",
-                content =
-                "You are a strict quantitative news impact classifier.\n\n" +
-
-                "Use this scoring scale strictly:\n" +
-                "0–20 = trivial/local news\n" +
-                "21–40 = minor update or small incremental research\n" +
-                "41–60 = moderate impact within a specific field\n" +
-                "61–75 = strong impact in scientific or economic community\n" +
-                "76–85 = major breakthrough or significant global relevance\n" +
-                "86–95 = paradigm-shifting discovery or major global consequence\n" +
-                "96–100 = historic, civilization-level impact\n\n" +
-
-                "IMPORTANT RULES:\n" +
-                "- Do NOT default to 80.\n" +
-                "- Use the full range realistically.\n" +
-                "- If research is preliminary, small sample, animal-only, or early-stage, reduce score.\n" +
-                "- If impact is speculative, reduce score.\n" +
-                "- Score must match the justification logically.\n" +
-                "- Never invent facts.\n" +
-                "- Never return empty fields.\n\n" +
-
-                "Return ONLY a valid JSON object."
+                content = systemPrompt
             },
-            new {
+            new
+            {
                 role = "user",
-                content =
-                "Return a JSON object with EXACT keys:\n" +
-                "impactScore (integer 0-100), impactReason (string), category (Science, Technology, Health, Politics, Economy, Environment, Other).\n\n" +
-                "News:\n" + text
+                content = "Analyze the following news article and return ONLY the JSON result.\n\n" + text
             }
         },
-                temperature = 0.3,          // 🔥 AQUI está a diferença
-                max_tokens = 800,
+
+                temperature = 0.2,
+                max_tokens = 1800,
                 response_format = new { type = "json_object" }
             };
 
-            return await SendRequestAsync(url, JsonConvert.SerializeObject(payload));
-        }
+            string apiResponse = await SendRequestForTopicsAsync(
+                url,
+                JsonConvert.SerializeObject(payload)
+            );
 
-        private async Task<GeminiResponse> SendRequestAsync(string url, string jsonPayload)
-        {
+            LogService.Info("🌐 IA RAW RESPONSE:");
+            LogService.Info(apiResponse ?? "");
+
+            // A resposta já vem como JSON final
+            string content = (apiResponse ?? "").Trim();
+
+            if (string.IsNullOrWhiteSpace(content))
+                throw new Exception("IA retornou conteúdo vazio.");
+
+            LogService.Info("📦 Conteúdo retornado pela IA:");
+            LogService.Info(content);
+
+            // remover code fences caso existam
+            content = content
+                .Replace("```json", "")
+                .Replace("```", "")
+                .Trim();
+
+            TopicScoresResponse parsed = null;
+
             try
             {
-                return await SendOnceAsync(url, jsonPayload);
+                parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(content);
             }
-            catch (Exception ex)
+            catch
             {
-                if (ex.Message != null && ex.Message.Contains("json_validate_failed"))
+                LogService.Warn("Falha ao desserializar JSON direto. Tentando extração manual...");
+
+                int start = content.IndexOf("{");
+                int end = content.LastIndexOf("}");
+
+                if (start >= 0 && end > start)
                 {
-                    LogService.Warn("⚠️ Groq json_validate_failed. Reenviando SEM response_format...");
+                    string jsonOnly = content.Substring(start, end - start + 1);
 
-                    var obj = JObject.Parse(jsonPayload);
-                    obj.Remove("response_format");
+                    LogService.Info("🔧 JSON extraído:");
+                    LogService.Info(jsonOnly);
 
-                    return await SendOnceAsync(url, obj.ToString(Formatting.None));
+                    parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(jsonOnly);
                 }
-
-                throw;
             }
+
+            if (parsed == null)
+                throw new Exception("Falha ao desserializar resposta da IA.");
+
+            // novo prompt usa "scores"
+            if (parsed.scores == null)
+                parsed.scores = new Dictionary<string, int>();
+
+            // garantir todas as chaves esperadas
+            EnsureAllTopics(parsed.scores);
+
+            // clamp de segurança 0..100
+            foreach (var key in parsed.scores.Keys.ToList())
+            {
+                parsed.scores[key] = Math.Max(0, Math.Min(100, parsed.scores[key]));
+            }
+
+            return parsed;
         }
 
-        private async Task<GeminiResponse> SendAndTrackAsync(string url, string jsonPayload)
+        private void EnsureAllTopics(Dictionary<string, int> scores)
         {
-            var response = await SendOnceAsync(url, jsonPayload);
+            LogService.Info("METHOD v1: EnsureAllTopics");
 
-            // 🔥 Aqui capturamos os tokens da última resposta
-            try
+            foreach (var code in NewsImpactRanker.WinForms.Models.TopicCatalog.Codes)
             {
-                var raw = _lastRawResponse;
-                // ⚠️ IMPORTANTE:
-                // Você precisa garantir que SendOnceAsync armazene a resposta bruta
-                // em uma variável privada chamada _lastRawResponse
-
-                if (!string.IsNullOrWhiteSpace(raw))
-                {
-                    var result = JObject.Parse(raw);
-
-                    var usage = result["usage"];
-                    if (usage != null)
-                    {
-                        int tokens = usage["total_tokens"]?.Value<int>() ?? 0;
-
-                        _totalTokensExecution += tokens;
-                        _totalRequestsExecution++;
-
-                        // 🔥 Registra para controle das últimas 24h
-                        TokenUsageService.RegisterUsage(tokens);
-
-                        LogService.Debug(
-                            $"Tokens usados nesta request: {tokens} | Execução atual: {_totalTokensExecution}"
-                        );
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogService.Warn($"Não foi possível capturar usage da resposta: {ex.Message}");
+                if (!scores.ContainsKey(code))
+                    scores[code] = 0;
             }
 
-            return response;
+            // clamp 0..100
+            var keys = new List<string>(scores.Keys);
+            foreach (var k in keys)
+            {
+                if (scores[k] < 0) scores[k] = 0;
+                if (scores[k] > 100) scores[k] = 100;
+            }
         }
 
-        private async Task<GeminiResponse> SendOnceAsync(string url, string jsonPayload)
+        private async Task<string> SendRequestForTopicsAsync(string url, string jsonPayload)
         {
             using (var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json"))
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
             {
                 request.Content = content;
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.AiApiKey);
+
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", _config.AiApiKey);
 
                 var response = await _httpClient.SendAsync(request);
+
                 string responseBody = await response.Content.ReadAsStringAsync();
-                _lastRawResponse = responseBody;
 
                 if (!response.IsSuccessStatusCode)
-                {
-                    // joga a msg inteira pra cima (pra detectar json_validate_failed)
                     throw new Exception($"Erro Groq API: {response.StatusCode} - {responseBody}");
-                }
 
                 var result = JObject.Parse(responseBody);
 
-                var usage = result["usage"];
-                if (usage != null)
-                {
-                    int tokens = usage["total_tokens"]?.Value<int>() ?? 0;
-
-                    _totalTokensToday += tokens;
-                    _totalRequestsToday++;
-
-                    LogService.Debug($"Consumo atual: {_totalTokensToday} tokens em {_totalRequestsToday} requests");
-                }
-
-                if (result["choices"]?[0]?["finish_reason"]?.ToString() == "length")
-                    throw new Exception("Resposta truncada pelo modelo (max_tokens insuficiente).");
-
                 string textResult = result["choices"]?[0]?["message"]?["content"]?.ToString();
+
                 if (string.IsNullOrWhiteSpace(textResult))
                     throw new Exception("Groq retornou conteúdo vazio.");
 
-                // extrair JSON contando chaves
                 int start = textResult.IndexOf('{');
-                if (start < 0)
-                    throw new Exception("JSON não encontrado na resposta da Groq.");
+                int end = textResult.LastIndexOf('}');
 
-                int braceCount = 0;
-                int end = -1;
-                for (int i = start; i < textResult.Length; i++)
-                {
-                    if (textResult[i] == '{') braceCount++;
-                    if (textResult[i] == '}') braceCount--;
-                    if (braceCount == 0) { end = i; break; }
-                }
-                if (end < 0)
-                    throw new Exception("JSON incompleto na resposta da Groq.");
+                if (start >= 0 && end > start)
+                    textResult = textResult.Substring(start, end - start + 1);
 
-                textResult = textResult.Substring(start, end - start + 1)
-                                       .Replace("```json", "")
-                                       .Replace("```", "")
-                                       .Trim();
-
-                LogService.Info("📦 JSON EXTRAÍDO (Groq): " + textResult);
-
-                var obj = JObject.Parse(textResult);
-
-                // exige o contrato
-                var impactScoreToken =
-                    obj["impactScore"] ??
-                    obj.Properties().FirstOrDefault(p => string.Equals(p.Name, "impactScore", StringComparison.OrdinalIgnoreCase))?.Value;
-
-                if (impactScoreToken == null)
-                    throw new Exception("JSON fora do contrato (sem impactScore).");
-
-                double score;
-                if (!double.TryParse(impactScoreToken.ToString().Replace(",", "."),
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out score))
-                    score = 0;
-
-                string reason =
-                    (obj["impactReason"] ??
-                     obj.Properties().FirstOrDefault(p => string.Equals(p.Name, "impactReason", StringComparison.OrdinalIgnoreCase))?.Value)?.ToString();
-
-                string category =
-                    (obj["category"] ??
-                     obj.Properties().FirstOrDefault(p => string.Equals(p.Name, "category", StringComparison.OrdinalIgnoreCase))?.Value)?.ToString();
-
-                var parsed = new GeminiResponse
-                {
-                    impactScore = Math.Max(0, Math.Min(100, score)),
-                    impactReason = reason,
-                    category = category
-                };
-
-                LogService.Info($"✅ MAPEADO: Score={parsed.impactScore}, Categoria={parsed.category}, Reason={parsed.impactReason}");
-                return parsed;
+                return textResult;
             }
+        }
+
+        private List<TopicResult> SelectBestNewsPerTopic()
+        {
+            LogService.Info("METHOD v1: SelectBestNewsPerTopic");
+            LogService.Info("DEBUG: Entrou em SelectBestNewsPerTopic");
+
+            var results = new List<TopicResult>();
+
+            // cópia do que já foi classificado
+            List<NewsScoresItem> availableNews;
+            lock (_newsScoresLock)
+            {
+                availableNews = new List<NewsScoresItem>(_allNewsScores);
+            }
+
+            LogService.Info($"DEBUG: availableNews inicial = {availableNews.Count}");
+
+            if (availableNews.Count == 0)
+                return results;
+
+            // Se nenhuma notícia tem qualquer score > 0, não seleciona nada.
+            int maxAny = 0;
+            foreach (var n in availableNews)
+            {
+                if (n?.Scores == null) continue;
+                foreach (var v in n.Scores.Values)
+                    if (v > maxAny) maxAny = v;
+            }
+
+            if (maxAny <= 0)
+            {
+                LogService.Info("DEBUG: Nenhuma notícia possui score > 0 em qualquer tópico.");
+                return results;
+            }
+
+            foreach (var code in NewsImpactRanker.WinForms.Models.TopicCatalog.Codes)
+            {
+                if (availableNews.Count == 0)
+                {
+                    LogService.Info("DEBUG: Não há mais notícias disponíveis.");
+                    break;
+                }
+
+                var topicName = NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName.ContainsKey(code)
+                    ? NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName[code]
+                    : code;
+
+                var ranked = availableNews
+                    .Select(n => new
+                    {
+                        News = n,
+                        Score = (n.Scores != null && n.Scores.ContainsKey(code)) ? n.Scores[code] : 0,
+                        Total = (n.Scores != null) ? n.Scores.Values.Sum() : 0,
+                        Order = n.SourceOrder
+                    })
+                    .OrderByDescending(x => x.Score)
+                    .ThenByDescending(x => x.Total)
+                    .ThenBy(x => x.Order)
+                    .FirstOrDefault();
+
+                if (ranked == null)
+                    continue;
+
+                // Se o melhor score deste tópico é 0, NÃO consome URL.
+                if (ranked.Score <= 0)
+                {
+                    LogService.Info($"DEBUG: tópico {topicName} ignorado (bestScore=0)");
+                    continue;
+                }
+
+                results.Add(new TopicResult
+                {
+                    Topic = topicName,
+                    Url = ranked.News.Url,
+                    Score = ranked.Score
+                });
+
+                LogService.Info($"DEBUG: selecionada {ranked.News.Url} para {topicName} (score={ranked.Score})");
+
+                // remove a notícia vencedora (não pode ganhar outro tópico)
+                availableNews.Remove(ranked.News);
+
+                LogService.Info($"DEBUG: remainingNews = {availableNews.Count}");
+            }
+
+            LogService.Info($"DEBUG: topicResults.Count = {results.Count}");
+            return results;
         }
 
         public static int GetTotalTokensToday()
         {
             return _totalTokensToday;
-        }
-
-        public static int GetTotalRequestsToday()
-        {
-            return _totalRequestsToday;
         }
 
     }

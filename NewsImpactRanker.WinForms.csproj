@@ -78,7 +78,11 @@
     <Compile Include="Models\NewsItem.cs" />
     <Compile Include="Models\AppConfig.cs" />
     <Compile Include="Models\GeminiResponse.cs" />
+    <Compile Include="Models\NewsScoresItem.cs" />
     <Compile Include="Models\TokenUsageEntry.cs" />
+    <Compile Include="Models\TopicCatalog.cs" />
+    <Compile Include="Models\TopicResult.cs" />
+    <Compile Include="Models\TopicScoresResponse.cs" />
     <Compile Include="Services\GroqService.cs" />
     <Compile Include="Services\ScrapingService.cs" />
     <Compile Include="Services\CacheService.cs" />

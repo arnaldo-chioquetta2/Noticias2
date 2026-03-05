@@ -13,5 +13,7 @@
         public string AiProvider { get; set; } = "groq"; // "groq", "openai", "gemini"
 
         public string NewsFilePath { get; set; }
+
+        public string PromptFilePath { get; set; }
     }
 }

@@ -12,14 +12,12 @@ using NewsImpactRanker.WinForms.Utils;
 using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Storage;
 using NewsImpactRanker.WinForms.Services;
-// using static System.Net.Mime.MediaTypeNames;
 
 namespace NewsImpactRanker.WinForms.Forms
 {
     public partial class MainForm : Form
     {
         private readonly ScrapingService _scrapingService;
-        // private readonly GeminiService _groqService;
         private readonly GroqService _groqService;
         private CancellationTokenSource _cts;
         private bool _limitToFive = true;   // 🔥 mude para false quando quiser liberar geral
@@ -28,6 +26,12 @@ namespace NewsImpactRanker.WinForms.Forms
         // ✅ NOVO: Lista para rastrear falhas de scraping por domínio
         private readonly List<string> _failedDomains = new List<string>();
         private readonly object _failedDomainsLock = new object();
+        private string _lastReportPath;
+
+        private readonly object _newsScoresLock = new object();
+
+        private readonly object _scoresLock = new object();
+        private List<NewsScoresItem> _allNewsScores = new List<NewsScoresItem>();
 
         public MainForm()
         {
@@ -39,10 +43,10 @@ namespace NewsImpactRanker.WinForms.Forms
             dgvResults.SortCompare += DgvResults_SortCompare;
 
             // ✅ Log de inicialização
-            LogService.Info("=== NewsImpactRanker Iniciado ===");
-            LogService.Info($"Config path: {StorageManager.ConfigPath}");
-            LogService.Info($"Cache path: {StorageManager.CachePath}");
-            LogService.Info($"Logs path: {StorageManager.LogsPath}");
+            //LogService.Info("=== NewsImpactRanker Iniciado ===");
+            //LogService.Info($"Config path: {StorageManager.ConfigPath}");
+            //LogService.Info($"Cache path: {StorageManager.CachePath}");
+            //LogService.Info($"Logs path: {StorageManager.LogsPath}");
         }
 
         private void DgvResults_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
@@ -67,6 +71,9 @@ namespace NewsImpactRanker.WinForms.Forms
         private async void btnStart_Click(object sender, EventArgs e)
         {
             var config = StorageManager.LoadConfig();
+            LogService.ResetLog();
+            LogService.Info("=== Processamento iniciado ===");
+
 
             if (string.IsNullOrEmpty(config.AiApiKey))
             {
@@ -82,50 +89,30 @@ namespace NewsImpactRanker.WinForms.Forms
             List<string> validUrls;
             bool usingFile = false;
 
-            // 🔹 1️⃣ Verificar se há URLs digitadas
-            var typedUrls = txtUrls.Lines
-                .Select(l => l.Trim())
-                .Where(l => UrlValidator.IsValid(l))
-                .Distinct()
-                .ToList();
-
-            if (typedUrls.Any())
+            try
             {
-                validUrls = typedUrls;
+                // 🔹 Ler URLs da fonte (campo ou arquivo)
+                validUrls = LoadUrlsFromSource(config);
 
-                if (_limitToFive)
-                    validUrls = validUrls.Take(5).ToList();
-
-                LogService.Info("Modo: URLs digitadas manualmente");
-            }
-            else
-            {
-                // 🔹 2️⃣ Caso contrário usar arquivo configurado
-                if (string.IsNullOrWhiteSpace(config.NewsFilePath) ||
-                    !File.Exists(config.NewsFilePath))
-                {
-                    MessageBox.Show("Configure o arquivo de notícias nas Configurações.",
-                        "Aviso",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-
-                    btnConfig_Click(null, null);
-                    return;
-                }
-
-                validUrls = File.ReadAllLines(config.NewsFilePath)
+                // detectar se veio do arquivo
+                var typedUrls = txtUrls.Lines
                     .Select(l => l.Trim())
                     .Where(l => UrlValidator.IsValid(l))
                     .Distinct()
                     .ToList();
 
+                usingFile = !typedUrls.Any();
+
                 if (_limitToFive)
                     validUrls = validUrls.Take(5).ToList();
-
-                usingFile = true;
-
-                LogService.Info("Modo: Arquivo configurado");
-                LogService.Info($"Arquivo: {config.NewsFilePath}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message,
+                    "Erro",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
             }
 
             if (validUrls.Count == 0)
@@ -142,6 +129,18 @@ namespace NewsImpactRanker.WinForms.Forms
             LogService.Info($"URLs carregadas: {validUrls.Count}" +
                 (_limitToFive ? " (modo limite 5 ativo)" : ""));
 
+            if (usingFile)
+            {
+                LogService.Info($"Arquivo utilizado: {config.NewsFilePath}");
+            }
+            else
+            {
+                LogService.Info("Modo: URLs digitadas manualmente");
+            }
+
+            // 🔹 limpar resultados anteriores
+            _allNewsScores.Clear();
+
             // 🔹 Resetar falhas
             lock (_failedDomainsLock)
             {
@@ -149,7 +148,10 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             ToggleUI(false);
+
             dgvResults.Rows.Clear();
+            dgvTopicResults.Rows.Clear();
+
             progressBar.Maximum = validUrls.Count;
             progressBar.Value = 0;
             lblProgress.Text = $"0/{validUrls.Count}";
@@ -157,6 +159,7 @@ namespace NewsImpactRanker.WinForms.Forms
             _cts = new CancellationTokenSource();
 
             int parallelism = (int)nudParallelism.Value;
+
             if (parallelism > 2)
             {
                 LogService.Info($"Paralelismo reduzido de {parallelism} para 2 (API Free Tier)");
@@ -165,13 +168,26 @@ namespace NewsImpactRanker.WinForms.Forms
 
             try
             {
+                // 🔹 processamento das URLs
                 await ProcessUrlsAsync(validUrls, parallelism, _cts.Token);
-                SaveFinalRankingToFile();
-                //ShowFailedDomainsReport();
+
+                LogService.Info($"Total de notícias classificadas: {_allNewsScores.Count}");
+
+                // 🔹 selecionar melhor notícia por assunto
+                var topicResults = SelectBestNewsPerTopic();
+
+                // 🔹 mostrar resultados na nova grid
+                DisplayTopicResults(topicResults);
+
+                // 🔹 salvar relatório final
+                SaveFinalRankingToFile(topicResults);
+
+                LogService.Info($"Total de tópicos selecionados: {topicResults.Count}");
             }
             catch (OperationCanceledException)
             {
                 LogService.Info("Processamento cancelado pelo usuário.");
+
                 MessageBox.Show("Processamento cancelado.",
                     "Informação",
                     MessageBoxButtons.OK,
@@ -180,6 +196,7 @@ namespace NewsImpactRanker.WinForms.Forms
             catch (Exception ex)
             {
                 LogService.Error("Erro fatal no processamento", ex);
+
                 MessageBox.Show($"Ocorreu um erro: {ex.Message}",
                     "Erro",
                     MessageBoxButtons.OK,
@@ -191,110 +208,40 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
-        private string _lastReportPath;
-
-        private void SaveFinalRankingToFile()
-        {
-
-            try
-            {
-                if (dgvResults.Rows.Count == 0)
-                    return;
-
-                string folder = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                    "NewsImpactRanker");
-
-                Directory.CreateDirectory(folder);
-
-                string fileName = $"Ranking_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
-                string fullPath = Path.Combine(folder, fileName);
-
-                int total = dgvResults.Rows.Count;
-
-                int successCount = dgvResults.Rows
-                    .Cast<DataGridViewRow>()
-                    .Count(r => r.Cells["colStatus"].Value?.ToString() == "Sucesso");
-
-                int failCount = total - successCount;
-
-                double successRate = total > 0
-                    ? (successCount * 100.0 / total)
-                    : 0;
-
-                var rankingLines = dgvResults.Rows
-                    .Cast<DataGridViewRow>()
-                    .Where(r => r.Cells["colImpact"].Value != null)
-                    .OrderByDescending(r => Convert.ToDouble(r.Cells["colImpact"].Value))
-                    .Select(r =>
-                    {
-                        string score = r.Cells["colImpact"].Value?.ToString();
-                        string url = r.Cells["colUrl"].Value?.ToString();
-                        return $"{score} | {url}";
-                    })
-                    .ToList();
-
-                List<string> fileContent = new List<string>();
-
-                fileContent.Add("=== NEWS IMPACT RANKER REPORT ===");
-                fileContent.Add($"Data: {DateTime.Now:dd/MM/yyyy HH:mm:ss}");
-                fileContent.Add("");
-                fileContent.Add($"Total de URLs: {total}");
-                fileContent.Add($"Sucesso: {successCount}");
-                fileContent.Add($"Falha: {failCount}");
-                fileContent.Add($"Taxa de sucesso: {successRate:F1}%");
-                fileContent.Add("");
-
-                fileContent.Add("=== RANKING ===");
-                fileContent.AddRange(rankingLines);
-                fileContent.Add("");
-
-                // 🔥 Domínios com falha
-                lock (_failedDomainsLock)
-                {
-                    if (_failedDomains.Any())
-                    {
-                        fileContent.Add("=== DOMÍNIOS COM FALHA ===");
-
-                        foreach (var domain in _failedDomains)
-                            fileContent.Add(domain);
-
-                        fileContent.Add("");
-                    }
-                }
-
-                int tokensLast24h = TokenUsageService.GetLast24hTokens();
-                int requestsLast24h = TokenUsageService.GetLast24hRequests();
-
-                fileContent.Add("=== CONSUMO API ===");
-                fileContent.Add($"Execução atual: {GroqService.GetTotalTokensToday()} tokens");
-                fileContent.Add($"Últimas 24h: {tokensLast24h} tokens");
-                fileContent.Add($"Requests últimas 24h: {requestsLast24h}");
-                fileContent.Add("");
-
-                File.WriteAllLines(fullPath, fileContent);
-
-                _lastReportPath = fullPath;
-
-                LogService.Info($"Relatório completo salvo em: {fullPath}");
-            }
-            catch (Exception ex)
-            {
-                LogService.Error("Erro ao salvar relatório final", ex);
-            }
-        }
-
         private async Task ProcessUrlsAsync(List<string> urls, int parallelism, CancellationToken ct)
         {
+            LogService.Info("METHOD v1: ProcessUrlsAsync");
+
             using (var semaphore = new SemaphoreSlim(parallelism))
             {
                 var tasks = urls.Select(async url =>
                 {
                     await semaphore.WaitAsync(ct);
+
                     try
                     {
                         if (ct.IsCancellationRequested) return;
-                        await ProcessSingleUrlAsync(url);
+
+                        var item = await ProcessSingleUrlAsync(url);
+
+                        if (item != null)
+                        {
+                            lock (_scoresLock)
+                            {
+                                // evitar duplicação
+                                if (!_allNewsScores.Any(n => n.Url == item.Url))
+                                {
+                                    item.SourceOrder = _allNewsScores.Count;
+                                    _allNewsScores.Add(item);
+                                }
+                            }
+
+                            LogService.Info($"Notícia armazenada para análise: {item.Url}");
+
+                            // atualizar ranking parcial
+                            var partialResults = SelectBestNewsPerTopic();
+                            DisplayTopicResults(partialResults);
+                        }
                     }
                     finally
                     {
@@ -307,108 +254,135 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
-        private async Task ProcessSingleUrlAsync(string url)
+        private async Task<NewsScoresItem> ProcessSingleUrlAsync(string url)
         {
+            LogService.Info("METHOD v3: ProcessSingleUrlAsync");
+
             try
             {
-                // 1. Scraping
-                var item = await _scrapingService.ScrapeAsync(url);
+                // 1️⃣ Scraping
+                var scraped = await _scrapingService.ScrapeAsync(url);
 
-                // ✅ Rastrear falhas de scraping por domínio
-                if (item.Status != "Sucesso")
+                if (scraped.Status != "Sucesso")
                 {
-                    string domain = ExtractDomain(url);
-                    lock (_failedDomainsLock)
+                    LogService.Warn($"Falha no scraping: {url}");
+                    return null;
+                }
+
+                // 2️⃣ IA
+                var response = await _groqService.ClassifyNewsAsync(scraped.RawText);
+
+                // ✅ AGORA: o campo correto é "scores"
+                if (response == null || response.scores == null)
+                {
+                    LogService.Warn($"IA retornou resposta inválida (scores nulo): {url}");
+                    return null;
+                }
+
+                NewsScoresItem item;
+
+                lock (_scoresLock)
+                {
+                    item = new NewsScoresItem
                     {
-                        if (!_failedDomains.Contains(domain))
-                        {
-                            _failedDomains.Add(domain);
-                            LogService.Warn($"Domínio adicionado à lista de falhas: {domain} (Status: {item.Status})");
-                        }
+                        Url = url,
+                        Title = scraped.Title,
+                        Scores = response.scores, // ✅ usar scores (siglas)
+                        SourceOrder = _allNewsScores.Count
+                    };
+
+                    // 🔴 impedir duplicação
+                    if (!_allNewsScores.Any(n => n.Url == item.Url))
+                    {
+                        _allNewsScores.Add(item);
+                        LogService.Info($"DEBUG: notícia adicionada {_allNewsScores.Count}");
+                    }
+                    else
+                    {
+                        LogService.Warn($"DEBUG: duplicata ignorada {url}");
                     }
                 }
 
-                if (item.Status == "Sucesso")
-                {
-                    // 2. Verificar Cache
-                    var cached = CacheService.Get(url, item.TextHash);
-                    if (cached != null)
-                    {
-                        LogService.Info($"Usando cache para {url}");
-                        AddOrUpdateGrid(cached);
-                        return;
-                    }
+                LogService.Info($"Notícia classificada: {url}");
 
-                    LogService.Info($"🧾 URL atual: {url}"); // passe a url pra este método ou logue no caller
+                // 4️⃣ Recalcular ranking parcial
+                var partialResults = SelectBestNewsPerTopic();
 
-                    // 3. Gemini - Classificação por IA
-                    try
-                    {
-                        // ✅ Chamada corrigida: sem CancellationToken (removido para simplificar)
-                        var analysis = await _groqService.ClassifyNewsAsync(item.RawText);
+                // 5️⃣ Atualizar grid em tempo real
+                DisplayTopicResults(partialResults);
 
-                        // ✅ Preencher dados da classificação
-                        item.ImpactScore = analysis.impactScore;
-                        item.ImpactReason = analysis.impactReason;
-                        item.Category = analysis.category;
-                        item.Status = "Sucesso"; // ✅ Garantir status correto após classificação
-
-                        // ✅ Salvar no cache para reutilização futura
-                        CacheService.Save(item);
-
-                        LogService.Info($"Classificação concluída para {url}: Score={analysis.impactScore}, Categoria={analysis.category}");
-                    }
-                    catch (Exception ex) when (ex.Message.Contains("429") || ex.Message.Contains("RESOURCE_EXHAUSTED"))
-                    {
-                        // ✅ Tratamento específico para rate limit da API Gemini
-                        item.Status = "Limite API";
-                        LogService.Warn($"Rate limit Gemini para {url}. Tente novamente mais tarde.");
-                    }
-                    catch (Exception ex)
-                    {
-                        // ✅ Tratamento para outros erros da API Gemini
-                        item.Status = "Erro Gemini";
-                        LogService.Error($"Erro Gemini para {url}", ex);
-                    }
-                }
-
-                // ✅ Adicionar item ao DataGridView (sucesso ou falha)
-                AddOrUpdateGrid(item);
-            }
-            catch (Exception ex) when (ex.Message.Contains("conjunto de caracteres") || ex.Message.Contains("charset"))
-            {
-                // ✅ Tratamento específico para erro de charset no scraping
-                LogService.Warn($"Erro de charset ao processar {url}. Tentando fallback...");
-
-                string domain = ExtractDomain(url);
-                lock (_failedDomainsLock)
-                {
-                    if (!_failedDomains.Contains(domain))
-                    {
-                        _failedDomains.Add(domain);
-                    }
-                }
-
-                AddOrUpdateGrid(new NewsItem { Url = url, Status = "Erro Charset", ProcessedAt = DateTime.Now });
+                return item;
             }
             catch (Exception ex)
             {
-                // ✅ Tratamento para erros genéricos no processamento
                 LogService.Error($"Erro ao processar URL {url}", ex);
-
-                // ✅ Rastrear falha genérica por domínio
-                string domain = ExtractDomain(url);
-                lock (_failedDomainsLock)
-                {
-                    if (!_failedDomains.Contains(domain))
-                    {
-                        _failedDomains.Add(domain);
-                    }
-                }
-
-                AddOrUpdateGrid(new NewsItem { Url = url, Status = "Erro", ProcessedAt = DateTime.Now });
+                return null;
             }
         }
+
+        private void SaveFinalRankingToFile(List<TopicResult> results)
+        {
+            try
+            {
+                string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+                _lastReportPath = Path.Combine(
+                    folder,
+                    $"NewsRanking_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
+                );
+
+                var lines = new List<string>();
+
+                lines.Add("===== NEWS TOPIC RANKING =====");
+                lines.Add($"Data: {DateTime.Now}");
+                lines.Add("");
+
+                lines.Add("===== RESULTADOS =====");
+                lines.Add("");
+
+                foreach (var r in results)
+                {
+                    lines.Add($"Assunto : {r.Topic}");
+                    lines.Add($"Score   : {r.Score}");
+                    lines.Add($"URL     : {r.Url}");
+                    lines.Add("");
+                }
+
+                lines.Add("");
+                lines.Add("===== RESUMO =====");
+                lines.Add($"Total de notícias analisadas : {_allNewsScores.Count}");
+                lines.Add($"Total de tópicos selecionados: {results.Count}");
+                lines.Add("");
+
+                List<string> failedDomainsCopy;
+
+                lock (_failedDomainsLock)
+                {
+                    failedDomainsCopy = new List<string>(_failedDomains);
+                }
+
+                lines.Add("===== DOMÍNIOS COM FALHA =====");
+
+                if (failedDomainsCopy.Count == 0)
+                {
+                    lines.Add("Nenhum domínio falhou.");
+                }
+                else
+                {
+                    foreach (var d in failedDomainsCopy)
+                        lines.Add(d);
+                }
+
+                File.WriteAllLines(_lastReportPath, lines);
+
+                LogService.Info($"Relatório salvo em {_lastReportPath}");
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao gerar relatório final", ex);
+            }
+        }
+
 
         // ✅ Adicionar este método na classe MainForm se ainda não existir
         private string ExtractDomain(string url)
@@ -614,30 +588,30 @@ namespace NewsImpactRanker.WinForms.Forms
         }
 
         private void RemoveUrlFromConfiguredFile(string url)
-{
-    try
-    {
-        var config = StorageManager.LoadConfig();
-
-        if (string.IsNullOrWhiteSpace(config.NewsFilePath) ||
-            !File.Exists(config.NewsFilePath))
-            return;
-
-        var lines = File.ReadAllLines(config.NewsFilePath).ToList();
-
-        int removed = lines.RemoveAll(l => l.Trim() == url.Trim());
-
-        if (removed > 0)
         {
-            File.WriteAllLines(config.NewsFilePath, lines);
-            LogService.Info($"URL removida do arquivo: {url}");
+            try
+            {
+                var config = StorageManager.LoadConfig();
+
+                if (string.IsNullOrWhiteSpace(config.NewsFilePath) || !File.Exists(config.NewsFilePath))
+                    return;
+
+                var lines = File.ReadAllLines(config.NewsFilePath).ToList();
+
+                int removed = lines.RemoveAll(l => l.Trim() == url);
+
+                if (removed > 0)
+                {
+                    File.WriteAllLines(config.NewsFilePath, lines);
+                    LogService.Info($"URL removida do arquivo de entrada: {url}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao remover URL do arquivo", ex);
+            }
         }
-    }
-    catch (Exception ex)
-    {
-        LogService.Error($"Erro ao remover URL do arquivo: {url}", ex);
-    }
-}
+
 
         private void btnOpenReport_Click(object sender, EventArgs e)
         {
@@ -669,6 +643,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
+
         private void btnOpenLog_Click(object sender, EventArgs e)
         {
             try
@@ -695,6 +670,233 @@ namespace NewsImpactRanker.WinForms.Forms
                 LogService.Error("Erro ao abrir log", ex);
             }
         }
+
+        private List<string> LoadUrlsFromSource(AppConfig config)
+        {
+            List<string> urls = new List<string>();
+
+            // 1️⃣ Verificar se há URLs digitadas na interface
+            var textUrls = txtUrls.Lines
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Where(l => UrlValidator.IsValid(l))
+                .Distinct()
+                .ToList();
+
+            if (textUrls.Count > 0)
+            {
+                LogService.Info($"Fonte de URLs: campo de texto ({textUrls.Count} URLs)");
+                urls.AddRange(textUrls);
+                return urls;
+            }
+
+            // 2️⃣ Caso contrário usar o arquivo configurado
+            if (string.IsNullOrWhiteSpace(config.NewsFilePath) || !File.Exists(config.NewsFilePath))
+            {
+                throw new Exception("Arquivo de URLs não configurado ou não encontrado.");
+            }
+
+            var fileUrls = File.ReadAllLines(config.NewsFilePath)
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Where(l => UrlValidator.IsValid(l))
+                .Distinct()
+                .ToList();
+
+            LogService.Info($"Fonte de URLs: arquivo ({fileUrls.Count} URLs)");
+            LogService.Info($"Arquivo utilizado: {config.NewsFilePath}");
+
+            urls.AddRange(fileUrls);
+
+            return urls;
+        }
+
+        //private IEnumerable<string> GetTopics()
+        //{
+        //    return TopicCatalog.Topics;
+        //}
+
+        private List<TopicResult> SelectBestNewsPerTopic()
+        {
+            LogService.Info("METHOD v2: SelectBestNewsPerTopic");
+            LogService.Info("DEBUG: Entrou em SelectBestNewsPerTopic");
+
+            var results = new List<TopicResult>();
+
+            // cópia do que já foi classificado
+            List<NewsScoresItem> availableNews;
+            lock (_scoresLock)
+            {
+                availableNews = new List<NewsScoresItem>(_allNewsScores);
+            }
+
+            LogService.Info($"DEBUG: availableNews inicial = {availableNews.Count}");
+
+            if (availableNews.Count == 0)
+                return results;
+
+            // Se nenhuma notícia tem qualquer score > 0, não faz sentido selecionar
+            int maxAny = 0;
+            foreach (var n in availableNews)
+            {
+                if (n?.Scores == null) continue;
+                foreach (var v in n.Scores.Values)
+                    if (v > maxAny) maxAny = v;
+            }
+
+            if (maxAny <= 0)
+            {
+                LogService.Info("DEBUG: Nenhuma notícia possui score > 0 em qualquer tópico.");
+                return results;
+            }
+
+            foreach (var code in NewsImpactRanker.WinForms.Models.TopicCatalog.Codes)
+            {
+                if (availableNews.Count == 0)
+                {
+                    LogService.Info("DEBUG: Não há mais notícias disponíveis.");
+                    break;
+                }
+
+                var topicName = NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName.ContainsKey(code)
+                    ? NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName[code]
+                    : code;
+
+                // acha a melhor notícia para este tópico (por CÓDIGO)
+                var ranked = availableNews
+                    .Select(n => new
+                    {
+                        News = n,
+                        Score = (n.Scores != null && n.Scores.ContainsKey(code)) ? n.Scores[code] : 0,
+                        Total = (n.Scores != null) ? n.Scores.Values.Sum() : 0,
+                        Order = n.SourceOrder
+                    })
+                    .OrderByDescending(x => x.Score)
+                    .ThenByDescending(x => x.Total)   // desempate: soma total
+                    .ThenBy(x => x.Order)             // depois: ordem original
+                    .FirstOrDefault();
+
+                if (ranked == null)
+                    continue;
+
+                // REGRA NOVA: se o melhor score deste tópico é 0, NÃO seleciona e NÃO consome URL
+                if (ranked.Score <= 0)
+                {
+                    // só loga e segue para o próximo tópico
+                    LogService.Info($"DEBUG: tópico {topicName} ignorado (bestScore=0)");
+                    continue;
+                }
+
+                results.Add(new TopicResult
+                {
+                    Topic = topicName,
+                    Url = ranked.News.Url,
+                    Score = ranked.Score
+                });
+
+                LogService.Info($"DEBUG: selecionada {ranked.News.Url} para {topicName} (score={ranked.Score})");
+
+                // remove a notícia para não ser usada em outro assunto
+                availableNews.Remove(ranked.News);
+
+                LogService.Info($"DEBUG: remainingNews = {availableNews.Count}");
+            }
+
+            LogService.Info($"DEBUG: topicResults.Count = {results.Count}");
+            return results;
+        }
+
+        private void DisplayTopicResults(List<TopicResult> results)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => DisplayTopicResults(results)));
+                return;
+            }
+
+            dgvTopicResults.Rows.Clear();
+
+            foreach (var r in results)
+            {
+                dgvTopicResults.Rows.Add(
+                    r.Topic,
+                    r.Url,
+                    r.Score
+                );
+            }
+            LogService.Info($"DEBUG GRID NAME: {dgvTopicResults.Name}");
+            LogService.Info($"DEBUG: Grid atualizada com {dgvTopicResults.Rows.Count} linhas");
+        }
+
+        private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0)
+                return;
+
+            if (dgvTopicResults.Columns[e.ColumnIndex].Name != "colTopicUrl")
+                return;
+
+            try
+            {
+                var row = dgvTopicResults.Rows[e.RowIndex];
+                string url = row.Cells[e.ColumnIndex].Value?.ToString();
+
+                if (string.IsNullOrWhiteSpace(url))
+                    return;
+
+                // 1️⃣ copiar para clipboard
+                Clipboard.SetText(url);
+
+                // 2️⃣ pintar linha
+                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205); // laranja claro
+
+                // 3️⃣ registrar log
+                LogService.Info($"URL copiada do ranking: {url}");
+
+                // 4️⃣ remover do arquivo se a execução veio de arquivo
+                if (_currentExecutionUsesFile)
+                {
+                    RemoveUrlFromConfiguredFile(url);
+                }
+
+                // feedback visual
+                var cell = row.Cells[e.ColumnIndex];
+                var originalValue = cell.Value;
+                var originalColor = cell.Style.ForeColor;
+
+                cell.Value = "✓ Copiado!";
+                cell.Style.ForeColor = Color.Green;
+
+                var timer = new System.Windows.Forms.Timer();
+                timer.Interval = 1500;
+
+                timer.Tick += (s, args) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+
+                    if (!this.IsDisposed)
+                    {
+                        cell.Value = originalValue;
+                        cell.Style.ForeColor = originalColor;
+                    }
+                };
+
+                timer.Start();
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao copiar URL da grid de tópicos", ex);
+
+                MessageBox.Show(
+                    "Não foi possível copiar o link.",
+                    "Erro",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+            }
+        }
+
 
     }
 }
