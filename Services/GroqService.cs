@@ -18,19 +18,6 @@ namespace NewsImpactRanker.WinForms.Services
     {
         private readonly HttpClient _httpClient;
         private readonly AppConfig _config;
-        private static int _totalTokensToday = 0;
-        private static int _totalRequestsToday = 0;
-        private static int _totalTokensExecution = 0;
-        private static int _totalRequestsExecution = 0;
-        private string _lastRawResponse;
-
-        private readonly object _newsScoresLock = new object();
-        private readonly List<NewsScoresItem> _allNewsScores = new List<NewsScoresItem>();
-
-        private static readonly SemaphoreSlim _rateLimiter = new SemaphoreSlim(2, 2);
-
-        private const int MAX_TEXT_LENGTH = 3000;
-        private const int MAX_TOKENS = 300;
 
         public GroqService()
         {
@@ -46,119 +33,110 @@ namespace NewsImpactRanker.WinForms.Services
             _config = StorageManager.LoadConfig();
         }
 
-        public async Task<TopicScoresResponse> ClassifyNewsAsync(string text)
+        // METHOD v4: ClassifyNewsAsync (GroqService)
+        public async Task<ServiceResult<TopicScoresResponse>> ClassifyNewsAsync(string text)
         {
-            LogService.Info("METHOD v3: ClassifyNewsAsync");
+            LogService.Info("METHOD v4: ClassifyNewsAsync (Groq)");
 
-            LogService.Info($"🧾 Texto p/ IA - len={text?.Length ?? 0}");
-            LogService.Info(" ");
-            LogService.Info(text ?? "");
-            LogService.Info(" ");
-
+            // 1. Validações Iniciais
             if (string.IsNullOrWhiteSpace(_config.AiApiKey))
-                throw new Exception("API Key da Groq não configurada.");
-
-            text = (text ?? "").Trim();
-
-            if (text.Length > 4000)
-                text = text.Substring(0, 4000);
+                return ServiceResult<TopicScoresResponse>.Fail("API Key da Groq não configurada.");
 
             if (string.IsNullOrWhiteSpace(_config.PromptFilePath) || !File.Exists(_config.PromptFilePath))
-                throw new Exception("Arquivo de prompt não configurado.");
+                return ServiceResult<TopicScoresResponse>.Fail("Arquivo de prompt não encontrado.");
 
+            // 2. Preparação do Texto
+            text = (text ?? "").Trim();
+
+            // Truncamento para segurança de tokens (ajustado para 2000 conforme conversamos no scraping)
+            if (text.Length > 2000)
+                text = text.Substring(0, 2000);
+
+            LogService.Info($"🧾 Texto p/ IA - len={text.Length}");
+
+            // 3. Montagem do Payload
             string systemPrompt = File.ReadAllText(_config.PromptFilePath);
-
             string url = "https://api.groq.com/openai/v1/chat/completions";
 
             var payload = new
             {
-                model = string.IsNullOrWhiteSpace(_config.AiModel)
-                    ? "llama-3.1-8b-instant"
-                    : _config.AiModel,
+                // Ajustado para usar SelectedModel conforme o novo AppConfig
+                model = string.IsNullOrWhiteSpace(_config.SelectedModel)
+                        ? "llama-3.1-8b-instant"
+                        : _config.SelectedModel,
 
                 messages = new[]
                 {
-            new
-            {
-                role = "system",
-                content = systemPrompt
-            },
-            new
-            {
-                role = "user",
-                content = "Analyze the following news article and return ONLY the JSON result.\n\n" + text
-            }
+            new { role = "system", content = systemPrompt },
+            new { role = "user", content = "Analyze the following news article and return ONLY the JSON result.\n\n" + text }
         },
 
-                temperature = 0.2,
-                max_tokens = 1800,
-                response_format = new { type = "json_object" }
+                temperature = 0.1, // Reduzido para ser mais determinístico
+                max_tokens = 1500,
+                response_format = new { type = "json_object" } // Groq suporta modo JSON
             };
 
-            string apiResponse = await SendRequestForTopicsAsync(
-                url,
-                JsonConvert.SerializeObject(payload)
-            );
+            // 4. Envio da Requisição
+            // Nota: SendRequestForTopicsAsync deve ser o método interno que faz o PostAsync
+            var apiResponseResult = await SendRequestForTopicsAsync(url, JsonConvert.SerializeObject(payload));
 
-            LogService.Info("🌐 IA RAW RESPONSE:");
-            LogService.Info(apiResponse ?? "");
+            if (!apiResponseResult.Success)
+                return ServiceResult<TopicScoresResponse>.Fail(apiResponseResult.ErrorMessage);
 
-            // A resposta já vem como JSON final
-            string content = (apiResponse ?? "").Trim();
-
+            // 5. Tratamento da Resposta
+            string content = (apiResponseResult.Data ?? "").Trim();
             if (string.IsNullOrWhiteSpace(content))
-                throw new Exception("IA retornou conteúdo vazio.");
+                return ServiceResult<TopicScoresResponse>.Fail("IA retornou conteúdo vazio.");
 
-            LogService.Info("📦 Conteúdo retornado pela IA:");
-            LogService.Info(content);
-
-            // remover code fences caso existam
-            content = content
-                .Replace("```json", "")
-                .Replace("```", "")
-                .Trim();
+            // Limpeza de possíveis tags de Markdown que a IA pode inserir
+            content = content.Replace("```json", "").Replace("```", "").Trim();
 
             TopicScoresResponse parsed = null;
 
             try
             {
+                // Tentativa de conversão direta
                 parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(content);
             }
-            catch
+            catch (Exception ex)
             {
-                LogService.Warn("Falha ao desserializar JSON direto. Tentando extração manual...");
+                LogService.Warn($"Falha na desserialização direta: {ex.Message}. Tentando extração manual...");
 
+                // Backup: Extração manual de JSON caso a IA envie texto extra
                 int start = content.IndexOf("{");
                 int end = content.LastIndexOf("}");
 
                 if (start >= 0 && end > start)
                 {
-                    string jsonOnly = content.Substring(start, end - start + 1);
-
-                    LogService.Info("🔧 JSON extraído:");
-                    LogService.Info(jsonOnly);
-
-                    parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(jsonOnly);
+                    try
+                    {
+                        string jsonOnly = content.Substring(start, end - start + 1);
+                        parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(jsonOnly);
+                    }
+                    catch
+                    {
+                        return ServiceResult<TopicScoresResponse>.Fail("JSON da IA está malformado e não pôde ser recuperado.");
+                    }
                 }
             }
 
+            // 6. Finalização e Normalização
             if (parsed == null)
-                throw new Exception("Falha ao desserializar resposta da IA.");
+                return ServiceResult<TopicScoresResponse>.Fail("Falha ao processar resposta da IA.");
 
-            // novo prompt usa "scores"
             if (parsed.scores == null)
                 parsed.scores = new Dictionary<string, int>();
 
-            // garantir todas as chaves esperadas
+            // Garante que todos os 26 tópicos existam no dicionário
             EnsureAllTopics(parsed.scores);
 
-            // clamp de segurança 0..100
+            // Normaliza os scores para o intervalo 0-100
             foreach (var key in parsed.scores.Keys.ToList())
             {
                 parsed.scores[key] = Math.Max(0, Math.Min(100, parsed.scores[key]));
             }
 
-            return parsed;
+            return ServiceResult<TopicScoresResponse>.Ok(parsed);
         }
 
         private void EnsureAllTopics(Dictionary<string, int> scores)
@@ -180,131 +158,76 @@ namespace NewsImpactRanker.WinForms.Services
             }
         }
 
-        private async Task<string> SendRequestForTopicsAsync(string url, string jsonPayload)
+        private async Task<ServiceResult<string>> SendRequestForTopicsAsync(string url, string jsonPayload)
         {
-            using (var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json"))
-            using (var request = new HttpRequestMessage(HttpMethod.Post, url))
+            try
             {
-                request.Content = content;
-
-                request.Headers.Authorization =
-                    new AuthenticationHeaderValue("Bearer", _config.AiApiKey);
-
-                var response = await _httpClient.SendAsync(request);
-
-                string responseBody = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                    throw new Exception($"Erro Groq API: {response.StatusCode} - {responseBody}");
-
-                var result = JObject.Parse(responseBody);
-
-                string textResult = result["choices"]?[0]?["message"]?["content"]?.ToString();
-
-                if (string.IsNullOrWhiteSpace(textResult))
-                    throw new Exception("Groq retornou conteúdo vazio.");
-
-                int start = textResult.IndexOf('{');
-                int end = textResult.LastIndexOf('}');
-
-                if (start >= 0 && end > start)
-                    textResult = textResult.Substring(start, end - start + 1);
-
-                return textResult;
-            }
-        }
-
-        private List<TopicResult> SelectBestNewsPerTopic()
-        {
-            LogService.Info("METHOD v1: SelectBestNewsPerTopic");
-            LogService.Info("DEBUG: Entrou em SelectBestNewsPerTopic");
-
-            var results = new List<TopicResult>();
-
-            // cópia do que já foi classificado
-            List<NewsScoresItem> availableNews;
-            lock (_newsScoresLock)
-            {
-                availableNews = new List<NewsScoresItem>(_allNewsScores);
-            }
-
-            LogService.Info($"DEBUG: availableNews inicial = {availableNews.Count}");
-
-            if (availableNews.Count == 0)
-                return results;
-
-            // Se nenhuma notícia tem qualquer score > 0, não seleciona nada.
-            int maxAny = 0;
-            foreach (var n in availableNews)
-            {
-                if (n?.Scores == null) continue;
-                foreach (var v in n.Scores.Values)
-                    if (v > maxAny) maxAny = v;
-            }
-
-            if (maxAny <= 0)
-            {
-                LogService.Info("DEBUG: Nenhuma notícia possui score > 0 em qualquer tópico.");
-                return results;
-            }
-
-            foreach (var code in NewsImpactRanker.WinForms.Models.TopicCatalog.Codes)
-            {
-                if (availableNews.Count == 0)
+                using (var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json"))
+                using (var request = new HttpRequestMessage(HttpMethod.Post, url))
                 {
-                    LogService.Info("DEBUG: Não há mais notícias disponíveis.");
-                    break;
-                }
+                    request.Content = content;
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.AiApiKey);
 
-                var topicName = NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName.ContainsKey(code)
-                    ? NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName[code]
-                    : code;
+                    var response = await _httpClient.SendAsync(request);
+                    string responseBody = await response.Content.ReadAsStringAsync();
 
-                var ranked = availableNews
-                    .Select(n => new
+                    if (!response.IsSuccessStatusCode)
                     {
-                        News = n,
-                        Score = (n.Scores != null && n.Scores.ContainsKey(code)) ? n.Scores[code] : 0,
-                        Total = (n.Scores != null) ? n.Scores.Values.Sum() : 0,
-                        Order = n.SourceOrder
-                    })
-                    .OrderByDescending(x => x.Score)
-                    .ThenByDescending(x => x.Total)
-                    .ThenBy(x => x.Order)
-                    .FirstOrDefault();
+                        // Verifica se é um erro 429 (Rate Limit Exceeded)
+                        if ((int)response.StatusCode == 429)
+                        {
+                            // Extrair o tempo de espera do cabeçalho "retry-after" (em segundos)
+                            if (response.Headers.TryGetValues("retry-after", out var retryAfterValues))
+                            {
+                                if (int.TryParse(retryAfterValues.First(), out int retryAfterSeconds))
+                                {
+                                    int minutes = retryAfterSeconds / 60;
+                                    int seconds = retryAfterSeconds % 60;
+                                    return ServiceResult<string>.Fail($"Limite de uso atingido. Tente novamente em {minutes}m{seconds}s.");
+                                }
+                            }
 
-                if (ranked == null)
-                    continue;
+                            // Caso não tenha o cabeçalho, extrair da mensagem de erro
+                            var errorJson = JObject.Parse(responseBody);
+                            var errorMessage = errorJson["error"]?["message"]?.ToString();
 
-                // Se o melhor score deste tópico é 0, NÃO consome URL.
-                if (ranked.Score <= 0)
-                {
-                    LogService.Info($"DEBUG: tópico {topicName} ignorado (bestScore=0)");
-                    continue;
+                            if (!string.IsNullOrEmpty(errorMessage))
+                            {
+                                var waitTimeMatch = System.Text.RegularExpressions.Regex.Match(errorMessage, @"in (\d+m\d+\.\d+s)");
+                                if (waitTimeMatch.Success)
+                                {
+                                    var waitTime = waitTimeMatch.Groups[1].Value;
+                                    return ServiceResult<string>.Fail($"Limite de uso atingido. Tente novamente em {waitTime}.");
+                                }
+                            }
+
+                            return ServiceResult<string>.Fail("Limite de uso atingido. Tente novamente mais tarde.");
+                        }
+                        else
+                        {
+                            return ServiceResult<string>.Fail($"Erro Groq API: {response.StatusCode} - {responseBody}");
+                        }
+                    }
+
+                    var result = JObject.Parse(responseBody);
+                    string textResult = result["choices"]?[0]?["message"]?["content"]?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(textResult))
+                        return ServiceResult<string>.Fail("Groq retornou conteúdo vazio.");
+
+                    int start = textResult.IndexOf('{');
+                    int end = textResult.LastIndexOf('}');
+
+                    if (start >= 0 && end > start)
+                        textResult = textResult.Substring(start, end - start + 1);
+
+                    return ServiceResult<string>.Ok(textResult);
                 }
-
-                results.Add(new TopicResult
-                {
-                    Topic = topicName,
-                    Url = ranked.News.Url,
-                    Score = ranked.Score
-                });
-
-                LogService.Info($"DEBUG: selecionada {ranked.News.Url} para {topicName} (score={ranked.Score})");
-
-                // remove a notícia vencedora (não pode ganhar outro tópico)
-                availableNews.Remove(ranked.News);
-
-                LogService.Info($"DEBUG: remainingNews = {availableNews.Count}");
             }
-
-            LogService.Info($"DEBUG: topicResults.Count = {results.Count}");
-            return results;
-        }
-
-        public static int GetTotalTokensToday()
-        {
-            return _totalTokensToday;
+            catch (TaskCanceledException)
+            {
+                return ServiceResult<string>.Fail("Tempo limite de espera excedido. Tente novamente mais tarde.");
+            }
         }
 
     }

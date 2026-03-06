@@ -3,13 +3,14 @@ using System.IO;
 using System.Data;
 using System.Linq;
 using System.Drawing;
+using Newtonsoft.Json;
 using System.Threading;
 using System.Diagnostics;
 using System.Windows.Forms;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using NewsImpactRanker.WinForms.Utils;
 using NewsImpactRanker.WinForms.Models;
+using NewsImpactRanker.WinForms.Utils;
 using NewsImpactRanker.WinForms.Storage;
 using NewsImpactRanker.WinForms.Services;
 
@@ -17,21 +18,37 @@ namespace NewsImpactRanker.WinForms.Forms
 {
     public partial class MainForm : Form
     {
+        // private bool _limitToFive = true;
+        private int _registroLimite = 0;
+
         private readonly ScrapingService _scrapingService;
         private readonly GroqService _groqService;
-        private CancellationTokenSource _cts;
-        private bool _limitToFive = true;   // 🔥 mude para false quando quiser liberar geral
+        private CancellationTokenSource _cts;        
         private bool _currentExecutionUsesFile = true;
-
-        // ✅ NOVO: Lista para rastrear falhas de scraping por domínio
         private readonly List<string> _failedDomains = new List<string>();
         private readonly object _failedDomainsLock = new object();
         private string _lastReportPath;
-
+        private int _processedCount = 0;
+        private int _successCount = 0;
+        private int _iaErrorCount = 0;
+        private int _scrapErrorCount = 0;
         private readonly object _newsScoresLock = new object();
-
         private readonly object _scoresLock = new object();
         private List<NewsScoresItem> _allNewsScores = new List<NewsScoresItem>();
+        private static readonly object _tokenLock = new object();
+        private int _tokensCurrentMinute = 0;
+        private DateTime _minuteStartTime = DateTime.Now;
+        private CancellationTokenSource _cancellationTokenSource;
+        private const int TPM_LIMIT = 5500; // Margem de segurança de 500 tokens abaixo dos 6000
+        private string _lastIaError = "Nenhum";
+        private Stopwatch _executionTimer = new Stopwatch();
+
+        // Adicione estas linhas junto com as outras declarações de campo (no topo da classe)
+        //private string _lastIaError = "Nenhum";
+        private readonly Queue<long> _lastProcessingTimes = new Queue<long>();
+        //private readonly Stopwatch _executionTimer = new Stopwatch();
+
+        private readonly GeminiService _geminiService; // Adicione esta linha
 
         public MainForm()
         {
@@ -39,14 +56,8 @@ namespace NewsImpactRanker.WinForms.Forms
             _scrapingService = new ScrapingService();
             // _geminiService = new GeminiService();
             _groqService = new GroqService();
-
+            _geminiService = new GeminiService();
             dgvResults.SortCompare += DgvResults_SortCompare;
-
-            // ✅ Log de inicialização
-            //LogService.Info("=== NewsImpactRanker Iniciado ===");
-            //LogService.Info($"Config path: {StorageManager.ConfigPath}");
-            //LogService.Info($"Cache path: {StorageManager.CachePath}");
-            //LogService.Info($"Logs path: {StorageManager.LogsPath}");
         }
 
         private void DgvResults_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
@@ -70,19 +81,32 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
+            // Carrega configuração atualizada
             var config = StorageManager.LoadConfig();
+
+            // Reseta logs e contadores globais
             LogService.ResetLog();
+            _successCount = 0;
+            _iaErrorCount = 0;
+            _scrapErrorCount = 0;
+
             LogService.Info("=== Processamento iniciado ===");
 
+            // 1. Validação Inteligente de API Key conforme o provedor selecionado
+            bool keyConfigurada = config.SelectedProvider == AiProvider.Gemini
+                ? !string.IsNullOrEmpty(config.GeminiApiKey)
+                : !string.IsNullOrEmpty(config.AiApiKey);
 
-            if (string.IsNullOrEmpty(config.AiApiKey))
+            if (!keyConfigurada)
             {
-                MessageBox.Show("Configure a API Key antes de iniciar.",
+                string provedor = config.SelectedProvider == AiProvider.Gemini ? "Gemini" : "Groq";
+                MessageBox.Show(
+                    $"A chave API do {provedor} não foi configurada.",
                     "Aviso",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-
-                btnConfig_Click(null, null);
+                    MessageBoxIcon.Warning
+                );
+                btnConfig_Click(null, null); // Abre a tela de configuração
                 return;
             }
 
@@ -91,10 +115,10 @@ namespace NewsImpactRanker.WinForms.Forms
 
             try
             {
-                // 🔹 Ler URLs da fonte (campo ou arquivo)
+                // 🔹 Carrega URLs da fonte (campo de texto ou arquivo)
                 validUrls = LoadUrlsFromSource(config);
 
-                // detectar se veio do arquivo
+                // Verifica se o campo de texto estava vazio para definir se estamos usando arquivo
                 var typedUrls = txtUrls.Lines
                     .Select(l => l.Trim())
                     .Where(l => UrlValidator.IsValid(l))
@@ -103,170 +127,235 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 usingFile = !typedUrls.Any();
 
-                if (_limitToFive)
-                    validUrls = validUrls.Take(5).ToList();
+                // 2. NOVA LÓGICA DE LIMITE: 0 = Infinito | n = Limite de registros
+                if (_registroLimite > 0)
+                {
+                    validUrls = validUrls.Take(_registroLimite).ToList();
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message,
-                    "Erro",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                MessageBox.Show($"Erro ao carregar URLs: {ex.Message}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
             if (validUrls.Count == 0)
             {
-                MessageBox.Show("Nenhuma URL válida encontrada.",
-                    "Aviso",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                MessageBox.Show("Nenhuma URL válida encontrada para processar.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
+            // Configura o Dashboard e Logs de Início
             _currentExecutionUsesFile = usingFile;
-
-            LogService.Info($"URLs carregadas: {validUrls.Count}" +
-                (_limitToFive ? " (modo limite 5 ativo)" : ""));
+            string infoLimite = _registroLimite > 0 ? $"(Limite de {_registroLimite} registros ativo)" : "(Modo lote completo)";
+            LogService.Info($"URLs carregadas: {validUrls.Count} {infoLimite}");
 
             if (usingFile)
-            {
                 LogService.Info($"Arquivo utilizado: {config.NewsFilePath}");
-            }
             else
-            {
-                LogService.Info("Modo: URLs digitadas manualmente");
-            }
+                LogService.Info("Modo: URLs digitadas manualmente no campo de texto.");
 
-            // 🔹 limpar resultados anteriores
+            // Limpa estados de execuções anteriores
             _allNewsScores.Clear();
+            lock (_failedDomainsLock) { _failedDomains.Clear(); }
 
-            // 🔹 Resetar falhas
-            lock (_failedDomainsLock)
-            {
-                _failedDomains.Clear();
-            }
-
+            // Bloqueia a interface e limpa as grids
             ToggleUI(false);
-
             dgvResults.Rows.Clear();
             dgvTopicResults.Rows.Clear();
 
+            // Configura Barra de Progresso
             progressBar.Maximum = validUrls.Count;
             progressBar.Value = 0;
             lblProgress.Text = $"0/{validUrls.Count}";
 
             _cts = new CancellationTokenSource();
 
-            int parallelism = (int)nudParallelism.Value;
-
-            if (parallelism > 2)
-            {
-                LogService.Info($"Paralelismo reduzido de {parallelism} para 2 (API Free Tier)");
-                parallelism = 2;
-            }
-
             try
             {
-                // 🔹 processamento das URLs
-                await ProcessUrlsAsync(validUrls, parallelism, _cts.Token);
+                // 🔹 INÍCIO DO PROCESSAMENTO
+                // Agora o ProcessUrlsAsync cuidará internamente de alternar entre Gemini/Groq
+                await ProcessUrlsAsync(validUrls);
 
-                LogService.Info($"Total de notícias classificadas: {_allNewsScores.Count}");
+                // 🔹 FINALIZAÇÃO E RELATÓRIOS
+                LogService.Info($"Processamento concluído. Sucessos: {_allNewsScores.Count}");
 
-                // 🔹 selecionar melhor notícia por assunto
+                // Seleciona as melhores notícias por tópico (Ranking Final)
                 var topicResults = SelectBestNewsPerTopic();
 
-                // 🔹 mostrar resultados na nova grid
+                // Atualiza a grid de resultados por assunto
                 DisplayTopicResults(topicResults);
 
-                // 🔹 salvar relatório final
+                // Salva o arquivo de texto com o ranking
                 SaveFinalRankingToFile(topicResults);
 
-                LogService.Info($"Total de tópicos selecionados: {topicResults.Count}");
+                LogService.Info($"Total de tópicos preenchidos: {topicResults.Count}");
             }
             catch (OperationCanceledException)
             {
-                LogService.Info("Processamento cancelado pelo usuário.");
-
-                MessageBox.Show("Processamento cancelado.",
-                    "Informação",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                LogService.Info("Operação interrompida pelo usuário.");
+                MessageBox.Show("Processamento cancelado.", "Informação", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                LogService.Error("Erro fatal no processamento", ex);
+                LogService.Error("Erro fatal no loop de processamento", ex);
 
-                MessageBox.Show($"Ocorreu um erro: {ex.Message}",
-                    "Erro",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                if (ex.Message.Contains("Limite de uso atingido"))
+                {
+                    MessageBox.Show(ex.Message, "Limite da API", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Application.Exit();
+                }
+                else
+                {
+                    MessageBox.Show($"Ocorreu um erro inesperado: {ex.Message}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
             finally
             {
+                // Libera a interface novamente
                 ToggleUI(true);
             }
         }
 
-        private async Task ProcessUrlsAsync(List<string> urls, int parallelism, CancellationToken ct)
+        // METHOD v8: ProcessUrlsAsync
+        private async Task ProcessUrlsAsync(List<string> urls)
         {
-            LogService.Info("METHOD v2: ProcessUrlsAsync");
+            _executionTimer.Restart(); // Inicia cronômetro global para o ETA
+            _lastIaError = "Nenhum";
+            _lastProcessingTimes.Clear(); // Limpa médias anteriores
 
-            using (var semaphore = new SemaphoreSlim(parallelism))
+            foreach (var url in urls)
             {
-                var tasks = urls.Select(async url =>
+                // 1. Verificação de Cancelamento
+                if (_cts != null && _cts.IsCancellationRequested) break;
+
+                // Cronômetro individual para esta notícia (usado para calcular a média de tempo)
+                Stopwatch itemTimer = Stopwatch.StartNew();
+
+                try
                 {
-                    await semaphore.WaitAsync(ct);
+                    UpdateInfoLabel(GetFormattedStatus($"Scraping: {url}"));
 
-                    try
+                    // 2. Executa o Scraping
+                    var scrapedNews = await _scrapingService.ScrapeAsync(url);
+
+                    if (scrapedNews == null || scrapedNews.Status != "Sucesso")
                     {
-                        if (ct.IsCancellationRequested) return;
+                        if (scrapedNews?.Status == "Bloqueado" || scrapedNews?.Status == "Sem Conteúdo")
+                            _scrapErrorCount++;
 
-                        // 1) Processa a URL e retorna o item (SEM adicionar em _allNewsScores lá dentro)
-                        var item = await ProcessSingleUrlAsync(url);
-
-                        if (item == null)
-                            return;
-
-                        bool added = false;
-
-                        // 2) Armazena uma única vez (evita duplicação)
-                        lock (_scoresLock)
-                        {
-                            if (!_allNewsScores.Any(n => n.Url == item.Url))
-                            {
-                                item.SourceOrder = _allNewsScores.Count;
-                                _allNewsScores.Add(item);
-                                added = true;
-                            }
-                        }
-
-                        if (added)
-                            LogService.Info($"Notícia armazenada para análise: {item.Url}");
-                        else
-                            LogService.Warn($"DEBUG: duplicata ignorada {item.Url}");
-
-                        // 3) Atualiza ranking parcial (uma única vez por URL processada)
-                        var partialResults = SelectBestNewsPerTopic();
-                        DisplayTopicResults(partialResults);
+                        UpdateProgress(); // Avança barra para não travar o ETA
+                        continue;
                     }
-                    catch (OperationCanceledException)
+
+                    // 3. Gerenciamento de Limites e Throttling
+                    var config = StorageManager.LoadConfig();
+
+                    if (config.SelectedProvider == AiProvider.Groq)
                     {
-                        // ok, cancelado
+                        // Groq precisa da pausa de tokens (Prompt1.txt ~2000 tokens de peso)
+                        await CheckAndDelayForTokenLimitAsync(scrapedNews.RawText);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        LogService.Error($"Erro ao processar URL {url} dentro de ProcessUrlsAsync", ex);
+                        UpdateInfoLabel(GetFormattedStatus("Gemini processando (sem filas)..."));
                     }
-                    finally
-                    {
-                        semaphore.Release();
-                        UpdateProgress();
-                    }
-                });
 
-                await Task.WhenAll(tasks);
+                    // 4. Chamada da Inteligência Artificial (Dinâmica)
+                    bool success;
+                    dynamic iaData;
+                    string errorMsg;
+
+                    if (config.SelectedProvider == AiProvider.Gemini)
+                    {
+                        var res = await _geminiService.ClassifyNewsAsync(scrapedNews.RawText);
+                        success = res.Success;
+                        iaData = res.Data;
+                        errorMsg = res.ErrorMessage;
+                    }
+                    else
+                    {
+                        var res = await _groqService.ClassifyNewsAsync(scrapedNews.RawText);
+                        success = res.Success;
+                        iaData = res.Data;
+                        errorMsg = res.ErrorMessage;
+                    }
+
+                    // 5. Processamento do Resultado da IA
+                    if (success && iaData != null && iaData.scores != null)
+                    {
+                        // Conversão segura do dynamic para o Dicionário que o Ranking espera
+                        var scores = JsonConvert.DeserializeObject<Dictionary<string, int>>(iaData.scores.ToString());
+
+                        // Método que salva na lista global e atualiza as Grids
+                        HandleClassificationSuccess(url, scrapedNews.Title, scores);
+                    }
+                    else
+                    {
+                        _lastIaError = errorMsg ?? "Resposta inválida (JSON)";
+                        LogService.Warn($"IA falhou para {url}: {_lastIaError}");
+                        _iaErrorCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogService.Error($"Erro crítico em {url}: {ex.Message}");
+                    _lastIaError = ex.Message;
+                    _iaErrorCount++;
+                }
+                finally
+                {
+                    // 6. Finalização da Rodada e Cálculo de Tempo
+                    itemTimer.Stop();
+
+                    lock (_lastProcessingTimes)
+                    {
+                        _lastProcessingTimes.Enqueue(itemTimer.ElapsedMilliseconds);
+                        if (_lastProcessingTimes.Count > 10) _lastProcessingTimes.Dequeue();
+                    }
+
+                    UpdateProgress();    // Atualiza barra visual
+                    UpdateStatusLabel(); // Atualiza contadores numéricos
+                }
+
+                // Pausa fixa de "respiro" para a interface e API
+                await Task.Delay(2000);
             }
+
+            _executionTimer.Stop();
+            UpdateInfoLabel(GetFormattedStatus("Processamento finalizado!"));
+        }
+        // METHOD v1: HandleClassificationSuccess
+        // Este é o método que processa o resultado positivo da IA (substitui o que você chamou de ProcessClassificationResult)
+        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores)
+        {
+            lock (_scoresLock)
+            {
+                // Criamos o objeto de Score para o Ranking
+                var item = new NewsScoresItem
+                {
+                    Url = url,
+                    Title = title,
+                    Scores = scores,
+                    SourceOrder = _allNewsScores.Count
+                };
+
+                // Evita duplicatas na lista global
+                if (!_allNewsScores.Any(n => n.Url == url))
+                {
+                    _allNewsScores.Add(item);
+                    _successCount++;
+                }
+            }
+
+            // Atualiza a UI (Labels e Grids)
+            UpdateStatusLabel();
+
+            // Recalcula os vencedores e atualiza a grid de tópicos em tempo real
+            var partialResults = SelectBestNewsPerTopic();
+            DisplayTopicResults(partialResults);
+
+            LogService.Info($"Notícia classificada com sucesso: {url}");
         }
 
         private async Task<NewsScoresItem> ProcessSingleUrlAsync(string url)
@@ -281,16 +370,30 @@ namespace NewsImpactRanker.WinForms.Forms
                 if (scraped.Status != "Sucesso")
                 {
                     LogService.Warn($"Falha no scraping: {url}");
+                    _scrapErrorCount++;
+                    UpdateStatusLabel();
                     return null;
                 }
 
                 // 2️⃣ IA
-                var response = await _groqService.ClassifyNewsAsync(scraped.RawText);
+                var responseResult = await _groqService.ClassifyNewsAsync(scraped.RawText);
 
-                // ✅ AGORA: o campo correto é "scores"
-                if (response == null || response.scores == null)
+                if (!responseResult.Success)
+                {
+                    string errorMessage = $"{responseResult.ErrorMessage}\n\nConsultas processadas antes do erro: {_successCount}";
+                    LogService.Error($"Erro na IA: {errorMessage}");
+                    MessageBox.Show(errorMessage, "Limite de Uso Atingido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _iaErrorCount++;
+                    UpdateStatusLabel();
+                    Application.Exit();
+                    return null;
+                }
+
+                if (responseResult.Data == null || responseResult.Data.scores == null)
                 {
                     LogService.Warn($"IA retornou resposta inválida (scores nulo): {url}");
+                    _iaErrorCount++;
+                    UpdateStatusLabel();
                     return null;
                 }
 
@@ -302,11 +405,10 @@ namespace NewsImpactRanker.WinForms.Forms
                     {
                         Url = url,
                         Title = scraped.Title,
-                        Scores = response.scores, // ✅ usar scores (siglas)
+                        Scores = responseResult.Data.scores,
                         SourceOrder = _allNewsScores.Count
                     };
 
-                    // 🔴 impedir duplicação
                     if (!_allNewsScores.Any(n => n.Url == item.Url))
                     {
                         _allNewsScores.Add(item);
@@ -319,6 +421,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
 
                 LogService.Info($"Notícia classificada: {url}");
+                _successCount++;
+                UpdateStatusLabel();
 
                 // 4️⃣ Recalcular ranking parcial
                 var partialResults = SelectBestNewsPerTopic();
@@ -331,12 +435,21 @@ namespace NewsImpactRanker.WinForms.Forms
             catch (Exception ex)
             {
                 LogService.Error($"Erro ao processar URL {url}", ex);
+                _iaErrorCount++;
+                UpdateStatusLabel();
                 return null;
             }
         }
 
+        private void UpdateStatusLabel()
+        {
+            lblInfo.Text = $"Sucesso: {_successCount} | Erro de IA: {_iaErrorCount} | Erro de Scrap: {_scrapErrorCount}";
+        }
+
         private void SaveFinalRankingToFile(List<TopicResult> results)
         {
+            // METHOD v2: SaveFinalRankingToFile
+            // Alteração: Inclusão da seção de Tópicos Monitorados e estatísticas por categoria.
             try
             {
                 string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -348,56 +461,79 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 var lines = new List<string>();
 
-                lines.Add("===== NEWS TOPIC RANKING =====");
+                lines.Add("================================================");
+                lines.Add("         NEWS TOPIC RANKING REPORT              ");
+                lines.Add("================================================");
                 lines.Add($"Data: {DateTime.Now}");
+                lines.Add($"IA Utilizada: {StorageManager.LoadConfig().SelectedProvider}");
                 lines.Add("");
 
-                lines.Add("===== RESULTADOS =====");
-                lines.Add("");
-
-                foreach (var r in results)
+                // --- NOVA SEÇÃO: TÓPICOS MONITORADOS ---
+                lines.Add("===== TÓPICOS MONITORADOS =====");
+                if (_allNewsScores.Any())
                 {
-                    lines.Add($"Assunto : {r.Topic}");
-                    lines.Add($"Score   : {r.Score}");
-                    lines.Add($"URL     : {r.Url}");
-                    lines.Add("");
-                }
-
-                lines.Add("");
-                lines.Add("===== RESUMO =====");
-                lines.Add($"Total de notícias analisadas : {_allNewsScores.Count}");
-                lines.Add($"Total de tópicos selecionados: {results.Count}");
-                lines.Add("");
-
-                List<string> failedDomainsCopy;
-
-                lock (_failedDomainsLock)
-                {
-                    failedDomainsCopy = new List<string>(_failedDomains);
-                }
-
-                lines.Add("===== DOMÍNIOS COM FALHA =====");
-
-                if (failedDomainsCopy.Count == 0)
-                {
-                    lines.Add("Nenhum domínio falhou.");
+                    // Pegamos as chaves (nomes dos tópicos) da primeira notícia com sucesso
+                    var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
+                    foreach (var topicName in allTopics)
+                    {
+                        // Conta quantas notícias bateram nesse tópico (score > 0)
+                        int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
+                        lines.Add($"- {topicName.PadRight(30)} ({count} notícias encontradas)");
+                    }
                 }
                 else
                 {
-                    foreach (var d in failedDomainsCopy)
-                        lines.Add(d);
+                    lines.Add("Nenhum tópico processado.");
+                }
+                lines.Add("");
+
+                lines.Add("===== MELHORES POR ASSUNTO (RANKING) =====");
+                lines.Add("");
+
+                if (results.Count == 0)
+                {
+                    lines.Add("Nenhuma notícia atingiu os critérios mínimos para o ranking.");
+                }
+                else
+                {
+                    foreach (var r in results)
+                    {
+                        lines.Add($"📌 TÓPICO: {r.Topic.ToUpper()}");
+                        lines.Add($"⭐ SCORE : {r.Score}");
+                        lines.Add($"🔗 URL   : {r.Url}");
+                        lines.Add($"📄 TÍTULO: {r.Title}");
+                        lines.Add(new string('-', 40));
+                    }
+                }
+
+                lines.Add("");
+                lines.Add("===== RESUMO DA EXECUÇÃO =====");
+                lines.Add($"Total de URLs analisadas      : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
+                lines.Add($"Sucessos de Classificação     : {_allNewsScores.Count}");
+                lines.Add($"Falhas de IA (🤖)            : {_iaErrorCount}");
+                lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
+                lines.Add($"Tópicos com match no Ranking  : {results.Count}");
+                lines.Add("");
+
+                // --- DOMÍNIOS COM FALHA ---
+                lock (_failedDomainsLock)
+                {
+                    if (_failedDomains.Any())
+                    {
+                        lines.Add("===== DOMÍNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
+                        foreach (var d in _failedDomains.Distinct())
+                            lines.Add($"❌ {d}");
+                    }
                 }
 
                 File.WriteAllLines(_lastReportPath, lines);
-
-                LogService.Info($"Relatório salvo em {_lastReportPath}");
+                LogService.Info($"Relatório completo salvo em: {_lastReportPath}");
             }
             catch (Exception ex)
             {
                 LogService.Error("Erro ao gerar relatório final", ex);
             }
         }
-
 
         // ✅ Adicionar este método na classe MainForm se ainda não existir
         private string ExtractDomain(string url)
@@ -516,7 +652,7 @@ namespace NewsImpactRanker.WinForms.Forms
             btnStart.Enabled = enabled;
             btnConfig.Enabled = enabled;
             txtUrls.Enabled = enabled;
-            nudParallelism.Enabled = enabled;
+            //nudParallelism.Enabled = enabled;
         }
 
         private void dgvResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -724,12 +860,7 @@ namespace NewsImpactRanker.WinForms.Forms
             urls.AddRange(fileUrls);
 
             return urls;
-        }
-
-        //private IEnumerable<string> GetTopics()
-        //{
-        //    return TopicCatalog.Topics;
-        //}
+        }        
 
         private List<TopicResult> SelectBestNewsPerTopic()
         {
@@ -912,6 +1043,110 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
+        private void UpdateInfoLabel(string message)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => UpdateInfoLabel(message)));
+                return;
+            }
+
+            lblInfo.Text = message;
+        }
+
+        // METHOD v8: DelayWithCountdownAsync
+        private async Task DelayWithCountdownAsync(int waitTimeMs)
+        {
+            int secondsToWait = waitTimeMs / 1000;
+
+            while (secondsToWait > 0)
+            {
+                // Mostra o dashboard completo + o cronômetro da pausa
+                UpdateInfoLabel(GetFormattedStatus($"Pausa de segurança: {secondsToWait}s (Limite Groq)"));
+                await Task.Delay(1000);
+                secondsToWait--;
+            }
+        }
+
+
+        private async Task CheckAndDelayForTokenLimitAsync(string textToProcess)
+        {
+            // Estima a quantidade de tokens: (caracteres / 4) + margem do prompt
+            // int estimatedTokens = (textToProcess.Length / 4) + 200;
+            // int estimatedTokens = (textToProcess.Length / 4) + 1000;
+            int estimatedTokens = (textToProcess.Length / 4) + 2000;
+
+            int waitTimeMs = 0;
+
+            lock (_tokenLock)
+            {
+                TimeSpan elapsed = DateTime.Now - _minuteStartTime;
+
+                // Se já passou mais de 1 minuto, reinicia a janela de contagem
+                if (elapsed.TotalMinutes >= 1)
+                {
+                    _tokensCurrentMinute = 0;
+                    _minuteStartTime = DateTime.Now;
+                    elapsed = TimeSpan.Zero;
+                }
+
+                // Se a requisição atual ultrapassar o limite seguro de TPM (ex: 5500)
+                if (_tokensCurrentMinute + estimatedTokens > TPM_LIMIT)
+                {
+                    // Calcula os milissegundos que faltam para completar a janela de 1 minuto
+                    waitTimeMs = 60000 - (int)elapsed.TotalMilliseconds;
+                    if (waitTimeMs < 0) waitTimeMs = 0;
+
+                    // Projeta os valores para depois da espera
+                    _tokensCurrentMinute = estimatedTokens;
+                    _minuteStartTime = DateTime.Now.AddMilliseconds(waitTimeMs);
+                }
+                else
+                {
+                    // Acumula os tokens no minuto atual
+                    _tokensCurrentMinute += estimatedTokens;
+                }
+            }
+
+            // Se for necessário esperar, chama a rotina de contagem decrescente visual
+            if (waitTimeMs > 0)
+            {
+                await DelayWithCountdownAsync(waitTimeMs);
+            }
+        }
+
+        // METHOD v5: GetFormattedStatus
+        private string GetFormattedStatus(string currentAction = "")
+        {
+            int total = progressBar.Maximum;
+            int processados = progressBar.Value;
+            int restantes = total - processados;
+
+            string eta = "Calculando...";
+
+            // Só calcula ETA após processar pelo menos uma notícia para ter uma média real
+            if (processados > 0 && _executionTimer.IsRunning)
+            {
+                long msDecorridos = _executionTimer.ElapsedMilliseconds;
+                long msPorNoticia = msDecorridos / processados;
+                TimeSpan tempoRestante = TimeSpan.FromMilliseconds(msPorNoticia * restantes);
+
+                eta = tempoRestante.TotalHours >= 1
+                    ? tempoRestante.ToString(@"hh\:mm\:ss")
+                    : tempoRestante.ToString(@"mm\:ss");
+            }
+
+            // Dashboard completo com Estatísticas e Último Erro
+            string dashboard = $"✅ {_successCount} | 🤖 {_iaErrorCount} | 🌐 {_scrapErrorCount} | 📈 {processados}/{total} | ⏳ Faltam: {eta}";
+
+            if (!string.IsNullOrEmpty(currentAction))
+                dashboard += $"\n→ Status: {currentAction}";
+
+            if (_iaErrorCount > 0)
+                dashboard += $"\n⚠ Último Erro IA: {_lastIaError}";
+
+            return dashboard;
+        }
 
     }
 }

@@ -3,9 +3,8 @@
     public class TopicResult
     {
         public string Topic { get; set; }
-
-        public string Url { get; set; }
-
         public int Score { get; set; }
+        public string Url { get; set; }
+        public string Title { get; set; } // <--- ADICIONE ESTA LINHA
     }
 }

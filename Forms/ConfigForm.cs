@@ -1,7 +1,9 @@
-using System;
-using System.Windows.Forms;
 using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Storage;
+using System;
+using System.Drawing;
+using System.Security.Cryptography;
+using System.Windows.Forms;
 
 namespace NewsImpactRanker.WinForms.Forms
 {
@@ -16,37 +18,40 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             var config = StorageManager.LoadConfig();
 
-            txtApiKey.Text = config.AiApiKey;
-            txtModel.Text = config.AiModel ?? "mixtral-8x7b-32768";
-            txtNewsFile.Text = config.NewsFilePath ?? "";
+            // 1. Configura o ComboBox de Provedores
+            cmbProvider.DataSource = Enum.GetValues(typeof(AiProvider));
+            cmbProvider.SelectedItem = config.SelectedProvider;
+
+            // 2. Carrega as chaves
+            txtApiKey.Text = config.AiApiKey;           // Chave Groq
+            txtGeminiApiKey.Text = config.GeminiApiKey; // Chave Gemini
+
+            // 3. Modelo e Arquivos (Corrigindo os nomes conforme o Designer)
+            txtModel.Text = config.SelectedModel ?? "llama-3.1-8b-instant";
+            txtNewsFile.Text = config.NewsFilePath;     // Nome correto: txtNewsFile
             txtPromptFile.Text = config.PromptFilePath;
+
+            // Se você tiver um ComboBox para escolher o provedor:
+            if (cmbProvider != null)
+            {
+                cmbProvider.DataSource = Enum.GetValues(typeof(AiProvider));
+                cmbProvider.SelectedItem = config.SelectedProvider;
+            }
         }
 
         private void btnSave_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtApiKey.Text))
+            var config = new AppConfig
             {
-                MessageBox.Show("A chave da API não pode estar vazia.",
-                    "Erro",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-                return;
-            }
-
-            var config = StorageManager.LoadConfig();
-
-            config.AiApiKey = txtApiKey.Text.Trim();
-            config.AiModel = string.IsNullOrWhiteSpace(txtModel.Text)
-                ? "mixtral-8x7b-32768"
-                : txtModel.Text.Trim();
-
-            config.NewsFilePath = txtNewsFile.Text?.Trim();
-
-            config.PromptFilePath = txtPromptFile.Text.Trim();
+                AiApiKey = txtApiKey.Text.Trim(),
+                GeminiApiKey = txtGeminiApiKey.Text.Trim(),
+                SelectedModel = txtModel.Text.Trim(),
+                PromptFilePath = txtPromptFile.Text.Trim(),
+                NewsFilePath = txtNewsFile.Text.Trim(),
+                SelectedProvider = (AiProvider)cmbProvider.SelectedItem
+            };
 
             StorageManager.SaveConfig(config);
-
-            this.DialogResult = DialogResult.OK;
             this.Close();
         }
 
@@ -80,6 +85,38 @@ namespace NewsImpactRanker.WinForms.Forms
                 {
                     txtPromptFile.Text = dialog.FileName;
                 }
+            }
+        }
+
+        // Método para atualizar a interface conforme o provedor selecionado
+        private void cmbProvider_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            var selected = (AiProvider)cmbProvider.SelectedItem;
+
+            if (selected == AiProvider.Gemini)
+            {
+                // Se for Gemini, foca na chave do Gemini
+                txtGeminiApiKey.Enabled = true;
+                txtGeminiApiKey.BackColor = Color.White;
+
+                // "Apaga" visualmente o Groq para não confundir
+                txtApiKey.Enabled = false;
+                txtApiKey.BackColor = Color.LightGray;
+
+                //lblGemini.ForeColor = Color.Blue; // Destaque visual
+                //lblGroq.ForeColor = Color.Gray;
+            }
+            else
+            {
+                // Se for Groq, faz o contrário
+                txtApiKey.Enabled = true;
+                txtApiKey.BackColor = Color.White;
+
+                txtGeminiApiKey.Enabled = false;
+                txtGeminiApiKey.BackColor = Color.LightGray;
+
+                //lblGroq.ForeColor = Color.Blue;
+                //lblGemini.ForeColor = Color.Gray;
             }
         }
 

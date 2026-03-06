@@ -1,19 +1,21 @@
 ﻿namespace NewsImpactRanker.WinForms.Models
 {
+    public enum AiProvider { Groq, Gemini }
+
     public class AppConfig
     {
-        // ✅ Renomeado para ser genérico (suporta Groq, OpenAI, etc.)
-        public string AiApiKey { get; set; }
+        // Chaves de API
+        public string AiApiKey { get; set; }      // Para o Groq
+        public string GeminiApiKey { get; set; }  // Para o Gemini
 
-        // ✅ Modelo agora é para Groq/OpenAI-compatible
-        // Exemplos Groq: "llama-3.1-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"
-        public string AiModel { get; set; } = "llama-3.1-70b-versatile";
+        // Preferências
+        public AiProvider SelectedProvider { get; set; } = AiProvider.Groq;
 
-        // ✅ Provider para diferenciar entre serviços (opcional, mas recomendado)
-        public string AiProvider { get; set; } = "groq"; // "groq", "openai", "gemini"
+        // Aqui está a correção: mudei para SelectedModel para ficar claro
+        public string SelectedModel { get; set; } = "llama-3.1-8b-instant";
 
-        public string NewsFilePath { get; set; }
-
+        // Caminhos de arquivos
         public string PromptFilePath { get; set; }
+        public string NewsFilePath { get; set; }
     }
 }

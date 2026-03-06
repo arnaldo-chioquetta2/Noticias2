@@ -21,8 +21,6 @@ namespace NewsImpactRanker.WinForms.Forms
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MainForm));
             this.label1 = new System.Windows.Forms.Label();
             this.txtUrls = new System.Windows.Forms.TextBox();
-            this.label2 = new System.Windows.Forms.Label();
-            this.nudParallelism = new System.Windows.Forms.NumericUpDown();
             this.btnStart = new System.Windows.Forms.Button();
             this.btnConfig = new System.Windows.Forms.Button();
             this.progressBar = new System.Windows.Forms.ProgressBar();
@@ -41,7 +39,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colTopic = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colTopicUrl = new System.Windows.Forms.DataGridViewLinkColumn();
             this.colTopicScore = new System.Windows.Forms.DataGridViewTextBoxColumn();
-            ((System.ComponentModel.ISupportInitialize)(this.nudParallelism)).BeginInit();
+            this.lblInfo = new System.Windows.Forms.Label();
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).BeginInit();
             this.SuspendLayout();
@@ -63,43 +61,12 @@ namespace NewsImpactRanker.WinForms.Forms
             this.txtUrls.Multiline = true;
             this.txtUrls.Name = "txtUrls";
             this.txtUrls.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.txtUrls.Size = new System.Drawing.Size(893, 100);
+            this.txtUrls.Size = new System.Drawing.Size(893, 41);
             this.txtUrls.TabIndex = 1;
-            // 
-            // label2
-            // 
-            this.label2.AutoSize = true;
-            this.label2.Location = new System.Drawing.Point(12, 133);
-            this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(63, 13);
-            this.label2.TabIndex = 2;
-            this.label2.Text = "Paralelismo:";
-            // 
-            // nudParallelism
-            // 
-            this.nudParallelism.Location = new System.Drawing.Point(81, 131);
-            this.nudParallelism.Maximum = new decimal(new int[] {
-            10,
-            0,
-            0,
-            0});
-            this.nudParallelism.Minimum = new decimal(new int[] {
-            1,
-            0,
-            0,
-            0});
-            this.nudParallelism.Name = "nudParallelism";
-            this.nudParallelism.Size = new System.Drawing.Size(50, 20);
-            this.nudParallelism.TabIndex = 3;
-            this.nudParallelism.Value = new decimal(new int[] {
-            3,
-            0,
-            0,
-            0});
             // 
             // btnStart
             // 
-            this.btnStart.Location = new System.Drawing.Point(137, 129);
+            this.btnStart.Location = new System.Drawing.Point(12, 129);
             this.btnStart.Name = "btnStart";
             this.btnStart.Size = new System.Drawing.Size(130, 23);
             this.btnStart.TabIndex = 4;
@@ -270,11 +237,22 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colTopicScore.ReadOnly = true;
             this.colTopicScore.Width = 80;
             // 
+            // lblInfo
+            // 
+            this.lblInfo.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.lblInfo.Location = new System.Drawing.Point(12, 69);
+            this.lblInfo.Name = "lblInfo";
+            this.lblInfo.Size = new System.Drawing.Size(893, 56);
+            this.lblInfo.TabIndex = 1000;
+            this.lblInfo.Text = ".";
+            this.lblInfo.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            // 
             // MainForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(917, 450);
+            this.Controls.Add(this.lblInfo);
             this.Controls.Add(this.btnOpenLog);
             this.Controls.Add(this.btnOpenReport);
             this.Controls.Add(this.dgvResults);
@@ -282,8 +260,6 @@ namespace NewsImpactRanker.WinForms.Forms
             this.Controls.Add(this.progressBar);
             this.Controls.Add(this.btnConfig);
             this.Controls.Add(this.btnStart);
-            this.Controls.Add(this.nudParallelism);
-            this.Controls.Add(this.label2);
             this.Controls.Add(this.txtUrls);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.dgvTopicResults);
@@ -291,7 +267,6 @@ namespace NewsImpactRanker.WinForms.Forms
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "NewsImpactRanker - Classificador de Impacto de Notícias";
-            ((System.ComponentModel.ISupportInitialize)(this.nudParallelism)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).EndInit();
             this.ResumeLayout(false);
@@ -301,8 +276,6 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.TextBox txtUrls;
-        private System.Windows.Forms.Label label2;
-        private System.Windows.Forms.NumericUpDown nudParallelism;
         private System.Windows.Forms.Button btnStart;
         private System.Windows.Forms.Button btnConfig;
         private System.Windows.Forms.ProgressBar progressBar;
@@ -322,5 +295,6 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.DataGridViewTextBoxColumn colTopic;
         private System.Windows.Forms.DataGridViewLinkColumn colTopicUrl;
         private System.Windows.Forms.DataGridViewTextBoxColumn colTopicScore;
+        private Label lblInfo;
     }
 }

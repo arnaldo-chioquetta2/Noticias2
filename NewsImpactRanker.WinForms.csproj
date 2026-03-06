@@ -83,10 +83,12 @@
     <Compile Include="Models\TopicCatalog.cs" />
     <Compile Include="Models\TopicResult.cs" />
     <Compile Include="Models\TopicScoresResponse.cs" />
+    <Compile Include="Services\GeminiService.cs" />
     <Compile Include="Services\GroqService.cs" />
     <Compile Include="Services\ScrapingService.cs" />
     <Compile Include="Services\CacheService.cs" />
     <Compile Include="Services\LogService.cs" />
+    <Compile Include="Services\ServiceResult.cs" />
     <Compile Include="Services\TokenUsageService.cs.cs" />
     <Compile Include="Storage\StorageManager.cs" />
     <Compile Include="Utils\UrlValidator.cs" />

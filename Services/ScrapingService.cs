@@ -36,9 +36,6 @@ namespace NewsImpactRanker.WinForms.Services
             };
         }
 
-        // ✅ Verifique se o ScrapeAsync está retornando os status corretamente
-        // Estas são as modificações necessárias no ScrapingService.cs:
-
         public async Task<NewsItem> ScrapeAsync(string url)
         {
             LogService.Info($"Iniciando scraping: {url}");
@@ -59,8 +56,7 @@ namespace NewsImpactRanker.WinForms.Services
             }
 
             // ✅ SÓ DEPOIS logar início do HTML
-            LogService.Info("🌐 HTML início: " +
-                html.Substring(0, Math.Min(120, html.Length)));
+            LogService.Info("🌐 HTML início: " + html.Substring(0, Math.Min(120, html.Length)));
 
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
@@ -96,8 +92,19 @@ namespace NewsImpactRanker.WinForms.Services
             // Normalização
             text = NormalizeText(text);
 
-            if (text.Length > 12000)
-                text = text.Substring(0, 12000);
+            // ✅ OTIMIZAÇÃO DE CUSTO/TOKENS: Reduzido de 12000 para 2000 caracteres (aprox. 500 tokens)
+            int maxChars = 2000;
+            if (text.Length > maxChars)
+            {
+                text = text.Substring(0, maxChars);
+
+                // Evita cortar o texto no meio de uma palavra para não confundir a IA
+                int lastSpace = text.LastIndexOf(' ');
+                if (lastSpace > 0)
+                {
+                    text = text.Substring(0, lastSpace) + "...";
+                }
+            }
 
             return new NewsItem
             {
@@ -110,6 +117,10 @@ namespace NewsImpactRanker.WinForms.Services
             };
         }
 
+        /// <summary>
+        /// METHOD v4: GetHtmlWithRetry
+        /// Versão adaptada para ignorar erros de ContentType/Charset inválido (ex: Nature.com)
+        /// </summary>
         private async Task<string> GetHtmlWithRetry(string url)
         {
             int maxAttempts = 3;
@@ -118,24 +129,38 @@ namespace NewsImpactRanker.WinForms.Services
             {
                 try
                 {
+                    // Define um timeout específico para a requisição se necessário
                     var response = await _httpClient.GetAsync(url);
 
                     if (!response.IsSuccessStatusCode)
                     {
+                        // Se for 404 ou 403, geralmente não adianta tentar novamente no loop
                         LogService.Warn($"HTTP {(int)response.StatusCode} para {url}");
                         return null;
                     }
 
-                    return await response.Content.ReadAsStringAsync();
+                    // --- CORREÇÃO PARA ERRO DE CHARSET ---
+                    // Em vez de ReadAsStringAsync (que falha se o cabeçalho do site estiver mal formatado),
+                    // lemos os dados puros (bytes) e forçamos a conversão para UTF-8.
+                    byte[] contentBytes = await response.Content.ReadAsByteArrayAsync();
+                    return Encoding.UTF8.GetString(contentBytes);
+                    // -------------------------------------
                 }
                 catch (Exception ex)
                 {
                     LogService.Warn($"Tentativa {attempt}/{maxAttempts} falhou para {url}: {ex.Message}");
 
                     if (attempt == maxAttempts)
+                    {
+                        LogService.Error($"Falha definitiva após {maxAttempts} tentativas para {url}");
                         return null;
+                    }
 
+                    // Espera exponencial: 2s, 4s...
                     int delay = (int)Math.Pow(2, attempt) * 1000;
+
+                    // Log visual para você saber que o sistema está aguardando o retry
+                    LogService.Info($"Aguardando {delay}ms para nova tentativa...");
                     await Task.Delay(delay);
                 }
             }
