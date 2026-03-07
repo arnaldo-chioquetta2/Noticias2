@@ -5,6 +5,8 @@
         public string Topic { get; set; }
         public int Score { get; set; }
         public string Url { get; set; }
-        public string Title { get; set; } // <--- ADICIONE ESTA LINHA
+        public string Title { get; set; }
+
+        public bool IsClicked { get; set; } = false;
     }
 }

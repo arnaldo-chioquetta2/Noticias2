@@ -267,6 +267,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "NewsImpactRanker - Classificador de Impacto de Notícias";
+            //this.Load += new System.EventHandler(this.MainForm_Load);
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).EndInit();
             this.ResumeLayout(false);

@@ -9,8 +9,8 @@ using System.Diagnostics;
 using System.Windows.Forms;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Utils;
+using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Storage;
 using NewsImpactRanker.WinForms.Services;
 
@@ -42,6 +42,8 @@ namespace NewsImpactRanker.WinForms.Forms
         private const int TPM_LIMIT = 5500; // Margem de segurança de 500 tokens abaixo dos 6000
         private string _lastIaError = "Nenhum";
         private Stopwatch _executionTimer = new Stopwatch();
+        private string _lastResultsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last_results.json");
+        private List<TopicResult> _currentTopicResults = new List<TopicResult>();
 
         // Adicione estas linhas junto com as outras declarações de campo (no topo da classe)
         //private string _lastIaError = "Nenhum";
@@ -54,10 +56,10 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             InitializeComponent();
             _scrapingService = new ScrapingService();
-            // _geminiService = new GeminiService();
             _groqService = new GroqService();
             _geminiService = new GeminiService();
             dgvResults.SortCompare += DgvResults_SortCompare;
+            LoadLastResults();
         }
 
         private void DgvResults_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
@@ -183,10 +185,17 @@ namespace NewsImpactRanker.WinForms.Forms
                 // Seleciona as melhores notícias por tópico (Ranking Final)
                 var topicResults = SelectBestNewsPerTopic();
 
-                // Atualiza a grid de resultados por assunto
-                DisplayTopicResults(topicResults);
+                // ---> INTEGRAÇÃO COM LAST RESULTS (JSON) <---
+                // 1. Atualiza a variável de memória global para o controle de cliques
+                _currentTopicResults = topicResults;
 
-                // Salva o arquivo de texto com o ranking
+                // 2. Salva o status "IsClicked = false" no disco imediatamente
+                SaveLastResults();
+
+                // 3. Atualiza a grid de resultados por assunto
+                DisplayTopicResults(_currentTopicResults);
+
+                // 4. Salva o arquivo de texto com o ranking
                 SaveFinalRankingToFile(topicResults);
 
                 LogService.Info($"Total de tópicos preenchidos: {topicResults.Count}");
@@ -216,7 +225,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 ToggleUI(true);
             }
         }
-
+            
         // METHOD v8: ProcessUrlsAsync
         private async Task ProcessUrlsAsync(List<string> urls)
         {
@@ -325,13 +334,11 @@ namespace NewsImpactRanker.WinForms.Forms
             _executionTimer.Stop();
             UpdateInfoLabel(GetFormattedStatus("Processamento finalizado!"));
         }
-        // METHOD v1: HandleClassificationSuccess
-        // Este é o método que processa o resultado positivo da IA (substitui o que você chamou de ProcessClassificationResult)
+
         private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores)
         {
             lock (_scoresLock)
             {
-                // Criamos o objeto de Score para o Ranking
                 var item = new NewsScoresItem
                 {
                     Url = url,
@@ -340,7 +347,6 @@ namespace NewsImpactRanker.WinForms.Forms
                     SourceOrder = _allNewsScores.Count
                 };
 
-                // Evita duplicatas na lista global
                 if (!_allNewsScores.Any(n => n.Url == url))
                 {
                     _allNewsScores.Add(item);
@@ -348,16 +354,32 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // Atualiza a UI (Labels e Grids)
             UpdateStatusLabel();
 
-            // Recalcula os vencedores e atualiza a grid de tópicos em tempo real
+            // 1. Recalcula o ranking atualizado com essa nova notícia
             var partialResults = SelectBestNewsPerTopic();
-            DisplayTopicResults(partialResults);
 
-            LogService.Info($"Notícia classificada com sucesso: {url}");
+            // 2. Preserva o status de leitura (IsClicked)
+            // Se o usuário clicou em uma notícia enquanto o processamento rolava, não podemos desfazer isso
+            foreach (var novoResultado in partialResults)
+            {
+                var antigo = _currentTopicResults.FirstOrDefault(r => r.Url == novoResultado.Url && r.Topic == novoResultado.Topic);
+                if (antigo != null)
+                {
+                    novoResultado.IsClicked = antigo.IsClicked;
+                }
+            }
+
+            // 3. Atualiza a lista global e SALVA NO JSON IMEDIATAMENTE
+            _currentTopicResults = partialResults;
+            SaveLastResults();
+
+            // 4. Atualiza a grid mostrando APENAS os que ainda não foram clicados
+            var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked).ToList();
+            DisplayTopicResults(itensParaMostrar);
+
+            LogService.Info($"Notícia classificada e JSON atualizado: {url}");
         }
-
         private async Task<NewsScoresItem> ProcessSingleUrlAsync(string url)
         {
             LogService.Info("METHOD v3: ProcessSingleUrlAsync");
@@ -976,9 +998,13 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
+            // METHOD v3: dgvTopicResults_CellContentClick
+            // Alteração: Integração com persistência JSON (IsClicked) e remoção automática da linha.
+
             if (e.RowIndex < 0 || e.ColumnIndex < 0)
                 return;
 
+            // Verifica se o clique foi na coluna da URL (ajuste o nome se for diferente na sua Grid)
             if (dgvTopicResults.Columns[e.ColumnIndex].Name != "colTopicUrl")
                 return;
 
@@ -990,29 +1016,38 @@ namespace NewsImpactRanker.WinForms.Forms
                 if (string.IsNullOrWhiteSpace(url))
                     return;
 
-                // 1️⃣ copiar para clipboard
+                // 1️⃣ Copiar para o Clipboard (Facilitar colagem no navegador/post)
                 Clipboard.SetText(url);
 
-                // 2️⃣ pintar linha
-                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205); // laranja claro
+                // 2️⃣ Marcar como lido no Modelo de Dados e Salvar JSON
+                // Procuramos na nossa lista global de resultados atuais
+                var item = _currentTopicResults.FirstOrDefault(r => r.Url == url);
+                if (item != null)
+                {
+                    item.IsClicked = true;
+                    SaveLastResults(); // Grava no last_results.json
+                }
 
-                // 3️⃣ registrar log
-                LogService.Info($"URL copiada do ranking: {url}");
-
-                // 4️⃣ remover do arquivo se a execução veio de arquivo
+                // 3️⃣ Registrar log e remover do arquivo fonte (se configurado)
+                LogService.Info($"URL marcada como lida e removida da lista: {url}");
                 if (_currentExecutionUsesFile)
                 {
                     RemoveUrlFromConfiguredFile(url);
                 }
 
-                // feedback visual
+                // 4️⃣ Feedback Visual na Grid
+                // Pintar a linha para indicar processamento do clique
+                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205); // Laranja claro
+
                 var cell = row.Cells[e.ColumnIndex];
                 var originalValue = cell.Value;
                 var originalColor = cell.Style.ForeColor;
 
-                cell.Value = "✓ Copiado!";
+                cell.Value = "✓ Copiado e Lido!";
                 cell.Style.ForeColor = Color.Green;
 
+                // 5️⃣ Timer para remover a linha da visão
+                // Dá 1.5 segundos para o usuário ver o feedback e depois remove
                 var timer = new System.Windows.Forms.Timer();
                 timer.Interval = 1500;
 
@@ -1023,23 +1058,29 @@ namespace NewsImpactRanker.WinForms.Forms
 
                     if (!this.IsDisposed)
                     {
-                        cell.Value = originalValue;
-                        cell.Style.ForeColor = originalColor;
+                        // Remove visualmente da grid para manter apenas o que falta ler
+                        // Usamos Try/Catch interno para evitar erro se a grid for limpa nesse meio tempo
+                        try { dgvTopicResults.Rows.RemoveAt(row.Index); } catch { }
+
+                        // Atualiza o Dashboard com o novo total de pendentes
+                        UpdateInfoLabel(GetFormattedStatus($"Restam {_currentTopicResults.Count(r => !r.IsClicked)} pendentes"));
                     }
                 };
 
                 timer.Start();
+
+                // 6️⃣ Opcional: Abrir o link automaticamente no navegador
+                /*
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+                */
             }
             catch (Exception ex)
             {
-                LogService.Error("Erro ao copiar URL da grid de tópicos", ex);
-
-                MessageBox.Show(
-                    "Não foi possível copiar o link.",
-                    "Erro",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                LogService.Error("Erro ao processar clique na URL do ranking", ex);
+                MessageBox.Show("Falha ao marcar link como lido.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -1146,6 +1187,47 @@ namespace NewsImpactRanker.WinForms.Forms
                 dashboard += $"\n⚠ Último Erro IA: {_lastIaError}";
 
             return dashboard;
+        }
+
+        // Método para Salvar
+        private void SaveLastResults()
+        {
+            try
+            {
+                string json = JsonConvert.SerializeObject(_currentTopicResults, Newtonsoft.Json.Formatting.Indented);
+                File.WriteAllText(_lastResultsPath, json);
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao salvar resultados pendentes.", ex);
+            }
+        }
+
+        // Método para Carregar
+        private void LoadLastResults()
+        {
+            try
+            {
+                if (File.Exists(_lastResultsPath))
+                {
+                    string json = File.ReadAllText(_lastResultsPath);
+                    var allResults = JsonConvert.DeserializeObject<List<TopicResult>>(json) ?? new List<TopicResult>();
+
+                    // Filtra pegando APENAS os que NÃO foram clicados
+                    _currentTopicResults = allResults.Where(r => !r.IsClicked).ToList();
+
+                    // Mostra na Grid se tiver algum sobrando
+                    if (_currentTopicResults.Any())
+                    {
+                        DisplayTopicResults(_currentTopicResults);
+                        UpdateInfoLabel($"Carregados {_currentTopicResults.Count} resultados não lidos da última sessão.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao carregar resultados pendentes.", ex);
+            }
         }
 
     }
