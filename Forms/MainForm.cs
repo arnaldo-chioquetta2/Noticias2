@@ -19,7 +19,12 @@ namespace NewsImpactRanker.WinForms.Forms
     public partial class MainForm : Form
     {
         // private bool _limitToFive = true;
-        private int _registroLimite = 0;
+        private int _registroLimite = 3;
+
+        private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults.json"); 
+        private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
+        private List<TopicResult> _currentTopicResults = new List<TopicResult>();
+        private Dictionary<string, NewsScoresItem> _evaluatedCache = new Dictionary<string, NewsScoresItem>();
 
         private readonly ScrapingService _scrapingService;
         private readonly GroqService _groqService;
@@ -28,10 +33,6 @@ namespace NewsImpactRanker.WinForms.Forms
         private readonly List<string> _failedDomains = new List<string>();
         private readonly object _failedDomainsLock = new object();
         private string _lastReportPath;
-        private int _processedCount = 0;
-        private int _successCount = 0;
-        private int _iaErrorCount = 0;
-        private int _scrapErrorCount = 0;
         private readonly object _newsScoresLock = new object();
         private readonly object _scoresLock = new object();
         private List<NewsScoresItem> _allNewsScores = new List<NewsScoresItem>();
@@ -42,15 +43,15 @@ namespace NewsImpactRanker.WinForms.Forms
         private const int TPM_LIMIT = 5500; // Margem de segurança de 500 tokens abaixo dos 6000
         private string _lastIaError = "Nenhum";
         private Stopwatch _executionTimer = new Stopwatch();
-        private string _lastResultsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last_results.json");
-        private List<TopicResult> _currentTopicResults = new List<TopicResult>();
-
-        // Adicione estas linhas junto com as outras declarações de campo (no topo da classe)
-        //private string _lastIaError = "Nenhum";
+        private string _folderPath;
         private readonly Queue<long> _lastProcessingTimes = new Queue<long>();
-        //private readonly Stopwatch _executionTimer = new Stopwatch();
-
         private readonly GeminiService _geminiService; // Adicione esta linha
+
+        private int _processedCount = 0;
+        private int _successCount = 0;
+        private int _iaErrorCount = 0;
+        private int _scrapErrorCount = 0;
+        private int _cacheHitCount = 0;
 
         public MainForm()
         {
@@ -60,6 +61,27 @@ namespace NewsImpactRanker.WinForms.Forms
             _geminiService = new GeminiService();
             dgvResults.SortCompare += DgvResults_SortCompare;
             LoadLastResults();
+            LoadEvaluatedCache();
+        }
+
+        private void LoadEvaluatedCache()
+        {
+            try
+            {
+                if (File.Exists(_cachePath))
+                {
+                    string json = File.ReadAllText(_cachePath);
+                    _evaluatedCache = JsonConvert.DeserializeObject<Dictionary<string, NewsScoresItem>>(json)
+                                      ?? new Dictionary<string, NewsScoresItem>();
+
+                    LogService.Info($"[CACHE] Memória carregada: {_evaluatedCache.Count} avaliações anteriores prontas para reuso.");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("[CACHE] Erro ao carregar memória de avaliações.", ex);
+                _evaluatedCache = new Dictionary<string, NewsScoresItem>();
+            }
         }
 
         private void DgvResults_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
@@ -91,6 +113,7 @@ namespace NewsImpactRanker.WinForms.Forms
             _successCount = 0;
             _iaErrorCount = 0;
             _scrapErrorCount = 0;
+            _cacheHitCount = 0;
 
             LogService.Info("=== Processamento iniciado ===");
 
@@ -225,8 +248,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 ToggleUI(true);
             }
         }
-            
-        // METHOD v8: ProcessUrlsAsync
+
+        // METHOD v9: ProcessUrlsAsync (Agora com Cache Inteligente)
         private async Task ProcessUrlsAsync(List<string> urls)
         {
             _executionTimer.Restart(); // Inicia cronômetro global para o ETA
@@ -243,9 +266,28 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 try
                 {
+                    // 👉 INÍCIO DO CACHE LOCAL: Checa a memória antes de ir para a internet
+                    if (_evaluatedCache != null && _evaluatedCache.ContainsKey(url))
+                    {
+                        UpdateInfoLabel(GetFormattedStatus($"Recuperando da Memória: {url}"));
+
+                        var cachedItem = _evaluatedCache[url];
+
+                        // Processa o sucesso passando "true" para não salvar de novo no cache à toa
+                        HandleClassificationSuccess(url, cachedItem.Title, cachedItem.Scores, true);
+
+                        LogService.Info($"[CACHE HIT] Avaliação reaproveitada na velocidade da luz: {url}");
+
+                        _cacheHitCount++;
+
+                        // Pula o scraping e a IA! O bloco 'finally' abaixo ainda vai rodar para atualizar a barra de progresso.
+                        continue;
+                    }
+                    // 👉 FIM DO CACHE LOCAL
+
                     UpdateInfoLabel(GetFormattedStatus($"Scraping: {url}"));
 
-                    // 2. Executa o Scraping
+                    // 2. Executa o Scraping (Só chega aqui se não tiver no cache)
                     var scrapedNews = await _scrapingService.ScrapeAsync(url);
 
                     if (scrapedNews == null || scrapedNews.Status != "Sucesso")
@@ -253,7 +295,8 @@ namespace NewsImpactRanker.WinForms.Forms
                         if (scrapedNews?.Status == "Bloqueado" || scrapedNews?.Status == "Sem Conteúdo")
                             _scrapErrorCount++;
 
-                        UpdateProgress(); // Avança barra para não travar o ETA
+                        // Aqui não chamamos continue direto para não pular o finally, 
+                        // ou se pular, o finally roda de qualquer jeito no C#
                         continue;
                     }
 
@@ -296,7 +339,7 @@ namespace NewsImpactRanker.WinForms.Forms
                         // Conversão segura do dynamic para o Dicionário que o Ranking espera
                         var scores = JsonConvert.DeserializeObject<Dictionary<string, int>>(iaData.scores.ToString());
 
-                        // Método que salva na lista global e atualiza as Grids
+                        // Método que salva na lista global, salva no CACHE e atualiza as Grids (fromCache = false padrão)
                         HandleClassificationSuccess(url, scrapedNews.Title, scores);
                     }
                     else
@@ -323,11 +366,11 @@ namespace NewsImpactRanker.WinForms.Forms
                         if (_lastProcessingTimes.Count > 10) _lastProcessingTimes.Dequeue();
                     }
 
-                    UpdateProgress();    // Atualiza barra visual
+                    UpdateProgress();    // Atualiza barra visual (Roda mesmo se der Cache Hit)
                     UpdateStatusLabel(); // Atualiza contadores numéricos
                 }
 
-                // Pausa fixa de "respiro" para a interface e API
+                // Pausa fixa de "respiro" para a interface e API (Evitar flood de conexões)
                 await Task.Delay(2000);
             }
 
@@ -335,11 +378,14 @@ namespace NewsImpactRanker.WinForms.Forms
             UpdateInfoLabel(GetFormattedStatus("Processamento finalizado!"));
         }
 
-        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores)
+        // Adicionamos o parâmetro bool fromCache = false
+        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores, bool fromCache = false)
         {
+            NewsScoresItem item; // Declare a variável fora do lock para podermos usá-la depois
+
             lock (_scoresLock)
             {
-                var item = new NewsScoresItem
+                item = new NewsScoresItem
                 {
                     Url = url,
                     Title = title,
@@ -354,13 +400,19 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
+            // 👉 SALVA NO CACHE SE FOR UMA NOTÍCIA NOVA (Veio da IA agora)
+            if (!fromCache)
+            {
+                _evaluatedCache[url] = item;
+                SaveEvaluatedCache(); // Salva a "Memória da IA" no disco
+            }
+
             UpdateStatusLabel();
 
             // 1. Recalcula o ranking atualizado com essa nova notícia
             var partialResults = SelectBestNewsPerTopic();
 
-            // 2. Preserva o status de leitura (IsClicked)
-            // Se o usuário clicou em uma notícia enquanto o processamento rolava, não podemos desfazer isso
+            // 2. Preserva o status de leitura (IsClicked) da Grid
             foreach (var novoResultado in partialResults)
             {
                 var antigo = _currentTopicResults.FirstOrDefault(r => r.Url == novoResultado.Url && r.Topic == novoResultado.Topic);
@@ -370,7 +422,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // 3. Atualiza a lista global e SALVA NO JSON IMEDIATAMENTE
+            // 3. Atualiza a lista global de exibição e SALVA A GRID NO JSON IMEDIATAMENTE
             _currentTopicResults = partialResults;
             SaveLastResults();
 
@@ -378,90 +430,22 @@ namespace NewsImpactRanker.WinForms.Forms
             var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked).ToList();
             DisplayTopicResults(itensParaMostrar);
 
-            LogService.Info($"Notícia classificada e JSON atualizado: {url}");
+            if (!fromCache)
+                LogService.Info($"Notícia classificada e Cache atualizado: {url}");
         }
-        private async Task<NewsScoresItem> ProcessSingleUrlAsync(string url)
-        {
-            LogService.Info("METHOD v3: ProcessSingleUrlAsync");
 
+        private void SaveEvaluatedCache()
+        {
             try
             {
-                // 1️⃣ Scraping
-                var scraped = await _scrapingService.ScrapeAsync(url);
-
-                if (scraped.Status != "Sucesso")
-                {
-                    LogService.Warn($"Falha no scraping: {url}");
-                    _scrapErrorCount++;
-                    UpdateStatusLabel();
-                    return null;
-                }
-
-                // 2️⃣ IA
-                var responseResult = await _groqService.ClassifyNewsAsync(scraped.RawText);
-
-                if (!responseResult.Success)
-                {
-                    string errorMessage = $"{responseResult.ErrorMessage}\n\nConsultas processadas antes do erro: {_successCount}";
-                    LogService.Error($"Erro na IA: {errorMessage}");
-                    MessageBox.Show(errorMessage, "Limite de Uso Atingido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    _iaErrorCount++;
-                    UpdateStatusLabel();
-                    Application.Exit();
-                    return null;
-                }
-
-                if (responseResult.Data == null || responseResult.Data.scores == null)
-                {
-                    LogService.Warn($"IA retornou resposta inválida (scores nulo): {url}");
-                    _iaErrorCount++;
-                    UpdateStatusLabel();
-                    return null;
-                }
-
-                NewsScoresItem item;
-
-                lock (_scoresLock)
-                {
-                    item = new NewsScoresItem
-                    {
-                        Url = url,
-                        Title = scraped.Title,
-                        Scores = responseResult.Data.scores,
-                        SourceOrder = _allNewsScores.Count
-                    };
-
-                    if (!_allNewsScores.Any(n => n.Url == item.Url))
-                    {
-                        _allNewsScores.Add(item);
-                        LogService.Info($"DEBUG: notícia adicionada {_allNewsScores.Count}");
-                    }
-                    else
-                    {
-                        LogService.Warn($"DEBUG: duplicata ignorada {url}");
-                    }
-                }
-
-                LogService.Info($"Notícia classificada: {url}");
-                _successCount++;
-                UpdateStatusLabel();
-
-                // 4️⃣ Recalcular ranking parcial
-                var partialResults = SelectBestNewsPerTopic();
-
-                // 5️⃣ Atualizar grid em tempo real
-                DisplayTopicResults(partialResults);
-
-                return item;
+                string json = JsonConvert.SerializeObject(_evaluatedCache, Newtonsoft.Json.Formatting.Indented);
+                File.WriteAllText(_cachePath, json);
             }
             catch (Exception ex)
             {
-                LogService.Error($"Erro ao processar URL {url}", ex);
-                _iaErrorCount++;
-                UpdateStatusLabel();
-                return null;
+                LogService.Error("[CACHE] Erro ao salvar memória de avaliações.", ex);
             }
-        }
+        }        
 
         private void UpdateStatusLabel()
         {
@@ -533,6 +517,15 @@ namespace NewsImpactRanker.WinForms.Forms
                 lines.Add($"Total de URLs analisadas      : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
                 lines.Add($"Sucessos de Classificação     : {_allNewsScores.Count}");
                 lines.Add($"Falhas de IA (🤖)            : {_iaErrorCount}");
+                lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
+                lines.Add($"Tópicos com match no Ranking  : {results.Count}");
+                lines.Add("");
+
+                lines.Add("===== RESUMO DA EXECUÇÃO =====");
+                lines.Add($"Total de URLs processadas     : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
+                lines.Add($"Sucessos Totais (IA + Cache)  : {_successCount}");
+                lines.Add($"   -> Desse total, via Cache  : {_cacheHitCount} ⚡"); // 👉 NOVO NO TXT
+                lines.Add($"Falhas de IA (🤖)             : {_iaErrorCount}");
                 lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
                 lines.Add($"Tópicos com match no Ranking  : {results.Count}");
                 lines.Add("");
