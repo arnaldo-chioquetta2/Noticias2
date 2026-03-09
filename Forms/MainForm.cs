@@ -18,8 +18,7 @@ namespace NewsImpactRanker.WinForms.Forms
 {
     public partial class MainForm : Form
     {
-        // private bool _limitToFive = true;
-        private int _registroLimite = 3;
+        private int _registroLimite = 0;
 
         private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults.json"); 
         private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
@@ -991,56 +990,45 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            // METHOD v3: dgvTopicResults_CellContentClick
-            // Alteração: Integração com persistência JSON (IsClicked) e remoção automática da linha.
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
 
-            if (e.RowIndex < 0 || e.ColumnIndex < 0)
-                return;
-
-            // Verifica se o clique foi na coluna da URL (ajuste o nome se for diferente na sua Grid)
-            if (dgvTopicResults.Columns[e.ColumnIndex].Name != "colTopicUrl")
-                return;
+            if (dgvTopicResults.Columns[e.ColumnIndex].Name != "colTopicUrl") return;
 
             try
             {
                 var row = dgvTopicResults.Rows[e.RowIndex];
                 string url = row.Cells[e.ColumnIndex].Value?.ToString();
 
-                if (string.IsNullOrWhiteSpace(url))
-                    return;
+                if (string.IsNullOrWhiteSpace(url)) return;
 
-                // 1️⃣ Copiar para o Clipboard (Facilitar colagem no navegador/post)
+                // 1. Copiar para a área de transferência
                 Clipboard.SetText(url);
 
-                // 2️⃣ Marcar como lido no Modelo de Dados e Salvar JSON
-                // Procuramos na nossa lista global de resultados atuais
+                // 2. Marcar como lido no Modelo de Dados e Salvar JSON
                 var item = _currentTopicResults.FirstOrDefault(r => r.Url == url);
                 if (item != null)
                 {
                     item.IsClicked = true;
-                    SaveLastResults(); // Grava no last_results.json
+                    SaveLastResults(); // Já grava que foi lido, não aparecerá amanhã
                 }
 
-                // 3️⃣ Registrar log e remover do arquivo fonte (se configurado)
-                LogService.Info($"URL marcada como lida e removida da lista: {url}");
                 if (_currentExecutionUsesFile)
                 {
                     RemoveUrlFromConfiguredFile(url);
                 }
 
-                // 4️⃣ Feedback Visual na Grid
-                // Pintar a linha para indicar processamento do clique
-                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205); // Laranja claro
+                // 3. Feedback Visual DEFINITIVO (Pinta a linha toda de laranja claro)
+                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205);
 
+                // 4. Feedback Visual TEMPORÁRIO (Muda apenas a célula clicada para verde)
                 var cell = row.Cells[e.ColumnIndex];
                 var originalValue = cell.Value;
                 var originalColor = cell.Style.ForeColor;
 
-                cell.Value = "✓ Copiado e Lido!";
+                cell.Value = "✓ Copiado!";
                 cell.Style.ForeColor = Color.Green;
 
-                // 5️⃣ Timer para remover a linha da visão
-                // Dá 1.5 segundos para o usuário ver o feedback e depois remove
+                // 5. Timer para remover APENAS a palavra "Copiado", mantendo a linha na Grid
                 var timer = new System.Windows.Forms.Timer();
                 timer.Interval = 1500;
 
@@ -1051,32 +1039,26 @@ namespace NewsImpactRanker.WinForms.Forms
 
                     if (!this.IsDisposed)
                     {
-                        // Remove visualmente da grid para manter apenas o que falta ler
-                        // Usamos Try/Catch interno para evitar erro se a grid for limpa nesse meio tempo
-                        try { dgvTopicResults.Rows.RemoveAt(row.Index); } catch { }
+                        // Devolve a URL para a célula e a cor padrão da fonte
+                        try
+                        {
+                            cell.Value = originalValue;
+                            cell.Style.ForeColor = originalColor;
+                        }
+                        catch { }
 
-                        // Atualiza o Dashboard com o novo total de pendentes
+                        // Atualiza o Dashboard com os pendentes reais
                         UpdateInfoLabel(GetFormattedStatus($"Restam {_currentTopicResults.Count(r => !r.IsClicked)} pendentes"));
                     }
                 };
 
                 timer.Start();
-
-                // 6️⃣ Opcional: Abrir o link automaticamente no navegador
-                /*
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
-                    FileName = url,
-                    UseShellExecute = true
-                });
-                */
             }
             catch (Exception ex)
             {
                 LogService.Error("Erro ao processar clique na URL do ranking", ex);
-                MessageBox.Show("Falha ao marcar link como lido.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
-
         private void UpdateInfoLabel(string message)
         {
             if (this.InvokeRequired)
