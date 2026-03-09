@@ -9,4 +9,6 @@ public class NewsScoresItem
     public Dictionary<string, int> Scores { get; set; }
 
     public int SourceOrder { get; set; }
+
+    public string Summary { get; set; }
 }

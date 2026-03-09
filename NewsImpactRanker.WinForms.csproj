@@ -75,10 +75,12 @@
     <Compile Include="Forms\ConfigForm.Designer.cs">
       <DependentUpon>ConfigForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Models\AiClassificationResponse.cs" />
     <Compile Include="Models\NewsItem.cs" />
     <Compile Include="Models\AppConfig.cs" />
     <Compile Include="Models\GeminiResponse.cs" />
     <Compile Include="Models\NewsScoresItem.cs" />
+    <Compile Include="Models\SummaryCacheItem.cs" />
     <Compile Include="Models\TokenUsageEntry.cs" />
     <Compile Include="Models\TopicCatalog.cs" />
     <Compile Include="Models\TopicResult.cs" />
