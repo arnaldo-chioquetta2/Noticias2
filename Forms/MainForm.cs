@@ -18,7 +18,7 @@ namespace NewsImpactRanker.WinForms.Forms
 {
     public partial class MainForm : Form
     {
-        private int _registroLimite = 5;
+        private int _registroLimite = 0;
 
         private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults.json"); 
         private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
@@ -328,10 +328,10 @@ namespace NewsImpactRanker.WinForms.Forms
                         success = res.Success; iaData = res.Data; errorMsg = res.ErrorMessage;
                     }
 
-                    // 👉 ETAPA E: FILTRO ANTI-DUPLICIDADE SEMÂNTICA (Coração da nova estratégia)
+                    // 👉 ETAPA E: FILTRO ANTI-DUPLICIDADE SEMÂNTICA
                     if (success && iaData != null && iaData.scores != null)
                     {
-                        // var scores = JsonConvert.DeserializeObject<Dictionary<string, int>>(iaData.scores.ToString());
+                        // Converte dinamicamente os scores para um dicionário real
                         Dictionary<string, int> scores = JsonConvert.DeserializeObject<Dictionary<string, int>>(iaData.scores.ToString());
 
                         // Captura o resumo de 10 palavras enviado pela IA
@@ -340,10 +340,11 @@ namespace NewsImpactRanker.WinForms.Forms
                         // 3.1: Identifica qual categoria recebeu a maior nota (Top 1)
                         var topCategory = scores.OrderByDescending(x => x.Value).FirstOrDefault();
 
-                        // Só aplicamos a deduplicação se a IA encontrou um assunto válido (score > 0)
+                        // Só aplicamos a deduplicação se a IA encontrou um assunto válido (score > 0) e temos um resumo
                         if (topCategory.Value > 0 && !string.IsNullOrWhiteSpace(summary))
                         {
                             // 3.2: Checa no cache se já existe esse MESMO resumo para essa MESMA categoria
+                            // (Lembrando que os itens entram no cache agora APENAS após o clique do usuário)
                             bool isDuplicate = _summaryCache.Any(s =>
                                 s.Summary.Equals(summary, StringComparison.OrdinalIgnoreCase) &&
                                 s.TopCategory.Equals(topCategory.Key, StringComparison.OrdinalIgnoreCase));
@@ -360,25 +361,15 @@ namespace NewsImpactRanker.WinForms.Forms
                                     RemoveUrlFromConfiguredFile(url);
                                 }
 
-                                // Interrompe o processamento desta URL aqui
+                                // Interrompe o processamento desta URL aqui (não vai pra Grid nem salva no cache)
                                 continue;
-                            }
-                            else
-                            {
-                                // 3.4: INÉDITA - Registra a nova "assinatura" da notícia no cache de resumos
-                                _summaryCache.Add(new SummaryCacheItem
-                                {
-                                    Summary = summary,
-                                    TopCategory = topCategory.Key,
-                                    DateAdded = DateTime.Now
-                                });
-
-                                SaveSummaryCache(); // Persiste no JSON de resumos
                             }
                         }
 
-                        // 👉 ETAPA F: SUCESSO FINAL
-                        // Se passou por todos os filtros, envia para a Grid e para o Cache de URL
+                        // 👉 ETAPA F: SUCESSO FINAL (Inédita ou primeira vez no dia)
+                        // Se passou pelo filtro, envia para a Grid e para o Cache de URL
+                        // Nota: O resumo vai junto no 'summary', mas ainda NÃO foi salvo no _summaryCache. 
+                        // Ele só será salvo no _summaryCache quando você CLICAR na Grid.
                         HandleClassificationSuccess(url, scrapedNews.Title, scores, summary, false);
                     }
                     else
@@ -509,7 +500,6 @@ namespace NewsImpactRanker.WinForms.Forms
             // Dashboard simplificado para o rodapé (lblInfo)
             lblInfo.Text = $"✅ Sucesso: {_successCount} | ♻️ Duplicadas: {_duplicateCount} | ⚡ Cache: {_cacheHitCount} | 🤖 Erros IA: {_iaErrorCount}";
         }
-
 
         private void SaveFinalRankingToFile(List<TopicResult> results)
         {
@@ -1075,12 +1065,41 @@ namespace NewsImpactRanker.WinForms.Forms
                 // 1. Copiar para a área de transferência
                 Clipboard.SetText(url);
 
-                // 2. Marcar como lido no Modelo de Dados e Salvar JSON
+                // 2. Marcar como lido e Salvar no Cache de Resumos
                 var item = _currentTopicResults.FirstOrDefault(r => r.Url == url);
                 if (item != null)
                 {
                     item.IsClicked = true;
-                    SaveLastResults(); // Já grava que foi lido, não aparecerá amanhã
+                    SaveLastResults();
+
+                    // 👉 CORREÇÃO: Buscamos a notícia completa no Cache de Avaliações
+                    // É lá que o 'Summary' e o dicionário 'Scores' completo residem
+                    if (_evaluatedCache.TryGetValue(url, out var fullNewsItem))
+                    {
+                        if (!string.IsNullOrWhiteSpace(fullNewsItem.Summary) && fullNewsItem.Scores != null)
+                        {
+                            // Descobre a categoria principal para parear com o resumo
+                            var topCategory = fullNewsItem.Scores.OrderByDescending(x => x.Value).FirstOrDefault();
+
+                            // Checa se já não está no cache de resumos para não duplicar
+                            bool alreadyInCache = _summaryCache.Any(s =>
+                                s.Summary.Equals(fullNewsItem.Summary, StringComparison.OrdinalIgnoreCase) &&
+                                s.TopCategory.Equals(topCategory.Key, StringComparison.OrdinalIgnoreCase));
+
+                            if (!alreadyInCache && topCategory.Value > 0)
+                            {
+                                _summaryCache.Add(new SummaryCacheItem
+                                {
+                                    Summary = fullNewsItem.Summary,
+                                    TopCategory = topCategory.Key,
+                                    DateAdded = DateTime.Now
+                                });
+
+                                SaveSummaryCache(); // Salva o JSON do cache de resumos
+                                LogService.Info($"[💾 CACHE SALVO] Resumo memorizado após clique: '{fullNewsItem.Summary}'");
+                            }
+                        }
+                    }
                 }
 
                 if (_currentExecutionUsesFile)
@@ -1088,10 +1107,10 @@ namespace NewsImpactRanker.WinForms.Forms
                     RemoveUrlFromConfiguredFile(url);
                 }
 
-                // 3. Feedback Visual DEFINITIVO (Pinta a linha toda de laranja claro)
+                // 3. Feedback Visual (Pinta a linha de laranja claro)
                 row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205);
 
-                // 4. Feedback Visual TEMPORÁRIO (Muda apenas a célula clicada para verde)
+                // 4. Feedback Visual Temporário (Célula vira "Copiado!")
                 var cell = row.Cells[e.ColumnIndex];
                 var originalValue = cell.Value;
                 var originalColor = cell.Style.ForeColor;
@@ -1099,30 +1118,17 @@ namespace NewsImpactRanker.WinForms.Forms
                 cell.Value = "✓ Copiado!";
                 cell.Style.ForeColor = Color.Green;
 
-                // 5. Timer para remover APENAS a palavra "Copiado", mantendo a linha na Grid
-                var timer = new System.Windows.Forms.Timer();
-                timer.Interval = 1500;
-
+                var timer = new System.Windows.Forms.Timer { Interval = 1500 };
                 timer.Tick += (s, args) =>
                 {
                     timer.Stop();
                     timer.Dispose();
-
                     if (!this.IsDisposed)
                     {
-                        // Devolve a URL para a célula e a cor padrão da fonte
-                        try
-                        {
-                            cell.Value = originalValue;
-                            cell.Style.ForeColor = originalColor;
-                        }
-                        catch { }
-
-                        // Atualiza o Dashboard com os pendentes reais
+                        try { cell.Value = originalValue; cell.Style.ForeColor = originalColor; } catch { }
                         UpdateInfoLabel(GetFormattedStatus($"Restam {_currentTopicResults.Count(r => !r.IsClicked)} pendentes"));
                     }
                 };
-
                 timer.Start();
             }
             catch (Exception ex)
@@ -1130,6 +1136,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 LogService.Error("Erro ao processar clique na URL do ranking", ex);
             }
         }
+
         private void UpdateInfoLabel(string message)
         {
             if (this.InvokeRequired)
@@ -1154,7 +1161,6 @@ namespace NewsImpactRanker.WinForms.Forms
                 secondsToWait--;
             }
         }
-
 
         private async Task CheckAndDelayForTokenLimitAsync(string textToProcess)
         {
