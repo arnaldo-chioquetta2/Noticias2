@@ -18,7 +18,12 @@ namespace NewsImpactRanker.WinForms.Forms
 {
     public partial class MainForm : Form
     {
+
+#if DEBUG
+        private int _registroLimite = 5;
+#else
         private int _registroLimite = 0;
+#endif
 
         private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults.json"); 
         private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
@@ -274,8 +279,14 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 try
                 {
-                    // 👉 ETAPA A: CACHE DE URL (Economia total de tempo e recursos)
-                    if (_evaluatedCache != null && _evaluatedCache.ContainsKey(url))
+
+#if DEBUG
+                    bool isCached = false;
+#else
+                    bool isCached = _evaluatedCache != null && _evaluatedCache.ContainsKey(url);
+#endif
+
+                    if (isCached)
                     {
                         UpdateInfoLabel(GetFormattedStatus($"Recuperando da Memória: {url}"));
 
@@ -424,7 +435,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     Url = url,
                     Title = title,
                     Scores = scores,
-                    Summary = summary, // 👉 Novo: Armazena o resumo de 10 palavras
+                    Summary = summary,
                     SourceOrder = _allNewsScores.Count
                 };
 
@@ -437,7 +448,6 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             // 2. Persistência no Cache de IA (Evita scraping e gasto de API no futuro)
-            // Só salvamos se for uma classificação NOVA (que não veio do cache)
             if (!fromCache)
             {
                 _evaluatedCache[url] = item;
@@ -447,12 +457,14 @@ namespace NewsImpactRanker.WinForms.Forms
             // 3. Atualização dos contadores na interface
             UpdateStatusLabel();
 
-            // 4. Recálculo do Ranking (Seleciona a melhor notícia para cada tópico)
-            var partialResults = SelectBestNewsPerTopic();
+            // 4. Recálculo do Ranking e ORDENAÇÃO
+            // Selecionamos as melhores notícias por tópico e já ordenamos pela maior pontuação
+            var partialResults = SelectBestNewsPerTopic()
+                                 .OrderByDescending(r => r.Score)
+                                 .ToList();
 
             // 5. Preservação do estado de "Lido" (IsClicked)
-            // Se o usuário já clicou em algo enquanto o processamento rodava, 
-            // precisamos manter essa informação ao atualizar a lista.
+            // Mantemos o check de quem já foi clicado mesmo após a reordenação
             foreach (var novoResultado in partialResults)
             {
                 var antigo = _currentTopicResults.FirstOrDefault(r => r.Url == novoResultado.Url && r.Topic == novoResultado.Topic);
@@ -462,18 +474,19 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // 6. Atualiza a lista global de resultados e salva o estado da Grid (last_results.json)
+            // 6. Atualiza a lista global e persiste a ordem no arquivo JSON
+            // Como partialResults está ordenada, o JSON salvará essa ordem de relevância
             _currentTopicResults = partialResults;
             SaveLastResults();
 
             // 7. Atualiza a exibição na Grid
-            // Filtramos para mostrar apenas o que o usuário ainda NÃO clicou/leu
+            // Mostramos apenas o que não foi clicado, mantendo o ranking do maior para o menor
             var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked).ToList();
             DisplayTopicResults(itensParaMostrar);
 
             if (!fromCache)
             {
-                LogService.Info($"[OK] Notícia classificada e indexada: {url}");
+                LogService.Info($"[OK] Notícia classificada e indexada no topo por relevância: {url}");
             }
         }
 
