@@ -201,8 +201,19 @@ namespace NewsImpactRanker.WinForms.Forms
 
             // Bloqueia a interface e limpa as grids
             ToggleUI(false);
-            dgvResults.Rows.Clear();
-            dgvTopicResults.Rows.Clear();
+
+            //dgvResults.Rows.Clear();
+            //dgvTopicResults.Rows.Clear();
+            // --- Troque isto: ---
+            // dgvResults.Rows.Clear();
+            // dgvTopicResults.Rows.Clear();
+
+            // --- Por isto: ---
+            if (dgvResults.DataSource != null) dgvResults.DataSource = null;
+            else dgvResults.Rows.Clear(); // Se não estiver vinculada, limpa normal
+
+            dgvTopicResults.DataSource = null; // Como usamos DataSource aqui, isso já limpa tudo
+            dgvTopicResults.Columns.Clear();   // Opcional: Limpa as colunas para garantir o novo layout
 
             // Configura Barra de Progresso
             progressBar.Maximum = validUrls.Count;
@@ -930,121 +941,100 @@ namespace NewsImpactRanker.WinForms.Forms
             urls.AddRange(fileUrls);
 
             return urls;
-        }        
+        }
 
         private List<TopicResult> SelectBestNewsPerTopic()
         {
-            LogService.Info("METHOD v2: SelectBestNewsPerTopic");
-            LogService.Info("DEBUG: Entrou em SelectBestNewsPerTopic");
+            var topicResults = new List<TopicResult>();
 
-            var results = new List<TopicResult>();
+            // 👉 SOLUÇÃO: Pega todos os nomes de tópicos que a IA já usou até agora
+            var allTopics = _allNewsScores
+                .SelectMany(n => n.Scores.Keys)
+                .Distinct()
+                .ToList();
 
-            // cópia do que já foi classificado
-            List<NewsScoresItem> availableNews;
-            lock (_scoresLock)
+            foreach (var topic in allTopics)
             {
-                availableNews = new List<NewsScoresItem>(_allNewsScores);
-            }
-
-            LogService.Info($"DEBUG: availableNews inicial = {availableNews.Count}");
-
-            if (availableNews.Count == 0)
-                return results;
-
-            // Se nenhuma notícia tem qualquer score > 0, não faz sentido selecionar
-            int maxAny = 0;
-            foreach (var n in availableNews)
-            {
-                if (n?.Scores == null) continue;
-                foreach (var v in n.Scores.Values)
-                    if (v > maxAny) maxAny = v;
-            }
-
-            if (maxAny <= 0)
-            {
-                LogService.Info("DEBUG: Nenhuma notícia possui score > 0 em qualquer tópico.");
-                return results;
-            }
-
-            foreach (var code in NewsImpactRanker.WinForms.Models.TopicCatalog.Codes)
-            {
-                if (availableNews.Count == 0)
-                {
-                    LogService.Info("DEBUG: Não há mais notícias disponíveis.");
-                    break;
-                }
-
-                var topicName = NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName.ContainsKey(code)
-                    ? NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName[code]
-                    : code;
-
-                // acha a melhor notícia para este tópico (por CÓDIGO)
-                var ranked = availableNews
-                    .Select(n => new
-                    {
-                        News = n,
-                        Score = (n.Scores != null && n.Scores.ContainsKey(code)) ? n.Scores[code] : 0,
-                        Total = (n.Scores != null) ? n.Scores.Values.Sum() : 0,
-                        Order = n.SourceOrder
-                    })
-                    .OrderByDescending(x => x.Score)
-                    .ThenByDescending(x => x.Total)   // desempate: soma total
-                    .ThenBy(x => x.Order)             // depois: ordem original
+                // Busca a notícia com maior nota para este tópico específico
+                var winner = _allNewsScores
+                    .Where(n => n.Scores.ContainsKey(topic) && n.Scores[topic] > 0)
+                    .OrderByDescending(n => n.Scores[topic])
                     .FirstOrDefault();
 
-                if (ranked == null)
-                    continue;
-
-                // REGRA NOVA: se o melhor score deste tópico é 0, NÃO seleciona e NÃO consome URL
-                if (ranked.Score <= 0)
+                if (winner != null)
                 {
-                    // só loga e segue para o próximo tópico
-                    LogService.Info($"DEBUG: tópico {topicName} ignorado (bestScore=0)");
-                    continue;
+                    topicResults.Add(new TopicResult
+                    {
+                        Topic = topic,
+                        Url = winner.Url,
+                        Score = winner.Scores[topic],
+                        Summary = winner.Summary, // Agora flui corretamente
+                        IsClicked = false
+                    });
                 }
-
-                results.Add(new TopicResult
-                {
-                    Topic = topicName,
-                    Url = ranked.News.Url,
-                    Score = ranked.Score
-                });
-
-                LogService.Info($"DEBUG: selecionada {ranked.News.Url} para {topicName} (score={ranked.Score})");
-
-                // remove a notícia para não ser usada em outro assunto
-                availableNews.Remove(ranked.News);
-
-                LogService.Info($"DEBUG: remainingNews = {availableNews.Count}");
             }
 
-            LogService.Info($"DEBUG: topicResults.Count = {results.Count}");
-
-            // return results;
-            return results.OrderByDescending(r => r.Score).ToList();
-
+            // 👉 ORDENAÇÃO FINAL: Garante que as maiores notas fiquem no topo da Grid
+            return topicResults.OrderByDescending(r => r.Score).ToList();
         }
 
         private void DisplayTopicResults(List<TopicResult> results)
         {
             if (InvokeRequired)
             {
-                Invoke(new Action(() => DisplayTopicResults(results)));
+                Invoke(new Action<List<TopicResult>>(DisplayTopicResults), results);
                 return;
             }
 
-            dgvTopicResults.Rows.Clear();
+            // 1. Limpa a Grid para evitar colunas duplicadas do Visual Studio
+            dgvTopicResults.DataSource = null;
+            dgvTopicResults.Columns.Clear();
+            dgvTopicResults.AutoGenerateColumns = false;
 
-            foreach (var r in results)
+            // 2. Coluna 1: Assunto (Tamanho adequado para o nome das categorias)
+            dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
             {
-                dgvTopicResults.Rows.Add(
-                    r.Topic,
-                    r.Url,
-                    r.Score
-                );
-            }
-            LogService.Info($"DEBUG GRID NAME: {dgvTopicResults.Name}");
-            LogService.Info($"DEBUG: Grid atualizada com {dgvTopicResults.Rows.Count} linhas");
+                Name = "colTopic",
+                HeaderText = "Assunto",
+                DataPropertyName = "Topic",
+                Width = 150 // Ajuste se seus tópicos tiverem nomes muito longos
+            });
+
+            // 3. Coluna 2: Score (Bem pequena, centralizada)
+            dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colScore",
+                HeaderText = "Score",
+                DataPropertyName = "Score",
+                Width = 50,
+                DefaultCellStyle = new DataGridViewCellStyle { Alignment = DataGridViewContentAlignment.MiddleCenter }
+            });
+
+            // 4. Coluna 3: Resumo (Espaço calculado para ~10 palavras)
+            dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colSummary",
+                HeaderText = "Resumo",
+                DataPropertyName = "Summary",
+                Width = 380 // Tamanho ideal para umas 10 a 15 palavras
+            });
+
+            // 5. Coluna 4: URL (Preenche o resto da Grid até o final)
+            // 👉 IMPORTANTE: Mantivemos o nome "colTopicUrl" para o seu evento de clique não quebrar!
+            dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colTopicUrl",
+                HeaderText = "URL",
+                DataPropertyName = "Url",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill // Mágica que estica até o final
+            });
+
+            // 6. Configurações visuais extras para ficar agradável
+            dgvTopicResults.RowHeadersVisible = false; // Tira aquela setinha inútil da esquerda
+            dgvTopicResults.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+
+            // 7. Joga os dados na tela
+            dgvTopicResults.DataSource = results;
         }
 
         private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)

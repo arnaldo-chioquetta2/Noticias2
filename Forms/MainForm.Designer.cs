@@ -124,7 +124,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.dgvResults.Name = "dgvResults";
             this.dgvResults.ReadOnly = true;
             this.dgvResults.RowHeadersVisible = false;
-            this.dgvResults.Size = new System.Drawing.Size(893, 251);
+            this.dgvResults.Size = new System.Drawing.Size(893, 390);
             this.dgvResults.TabIndex = 8;
             this.dgvResults.Visible = false;
             this.dgvResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dgvResults_CellContentClick);
@@ -212,7 +212,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.dgvTopicResults.Name = "dgvTopicResults";
             this.dgvTopicResults.ReadOnly = true;
             this.dgvTopicResults.RowHeadersVisible = false;
-            this.dgvTopicResults.Size = new System.Drawing.Size(893, 251);
+            this.dgvTopicResults.Size = new System.Drawing.Size(893, 390);
             this.dgvTopicResults.TabIndex = 999;
             this.dgvTopicResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dgvTopicResults_CellContentClick);
             // 
@@ -251,7 +251,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(917, 450);
+            this.ClientSize = new System.Drawing.Size(917, 589);
             this.Controls.Add(this.lblInfo);
             this.Controls.Add(this.btnOpenLog);
             this.Controls.Add(this.btnOpenReport);

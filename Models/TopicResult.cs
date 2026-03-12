@@ -8,5 +8,8 @@
         public string Title { get; set; }
 
         public bool IsClicked { get; set; } = false;
+
+        public string Summary { get; set; }
+
     }
 }
