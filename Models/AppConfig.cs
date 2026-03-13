@@ -17,5 +17,6 @@
         // Caminhos de arquivos
         public string PromptFilePath { get; set; }
         public string NewsFilePath { get; set; }
+        public int SummaryWordCount { get; set; } = 10;
     }
 }

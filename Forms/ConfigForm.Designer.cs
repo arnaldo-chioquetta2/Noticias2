@@ -31,6 +31,9 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btnBrowsePrompt = new System.Windows.Forms.Button();
             this.btnSave = new System.Windows.Forms.Button();
             this.btnCancel = new System.Windows.Forms.Button();
+            this.nudSummaryWordCount = new System.Windows.Forms.NumericUpDown();
+            this.label5 = new System.Windows.Forms.Label();
+            ((System.ComponentModel.ISupportInitialize)(this.nudSummaryWordCount)).BeginInit();
             this.SuspendLayout();
             // 
             // labelProvider
@@ -151,7 +154,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnSave
             // 
-            this.btnSave.Location = new System.Drawing.Point(237, 300);
+            this.btnSave.Location = new System.Drawing.Point(12, 335);
             this.btnSave.Name = "btnSave";
             this.btnSave.Size = new System.Drawing.Size(75, 23);
             this.btnSave.TabIndex = 10;
@@ -161,12 +164,43 @@ namespace NewsImpactRanker.WinForms.Forms
             // btnCancel
             // 
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(318, 300);
+            this.btnCancel.Location = new System.Drawing.Point(318, 335);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(75, 23);
             this.btnCancel.TabIndex = 9;
             this.btnCancel.Text = "Cancelar";
             this.btnCancel.Click += new System.EventHandler(this.btnCancel_Click);
+            // 
+            // nudSummaryWordCount
+            // 
+            this.nudSummaryWordCount.Location = new System.Drawing.Point(351, 293);
+            this.nudSummaryWordCount.Maximum = new decimal(new int[] {
+            30,
+            0,
+            0,
+            0});
+            this.nudSummaryWordCount.Minimum = new decimal(new int[] {
+            5,
+            0,
+            0,
+            0});
+            this.nudSummaryWordCount.Name = "nudSummaryWordCount";
+            this.nudSummaryWordCount.Size = new System.Drawing.Size(43, 20);
+            this.nudSummaryWordCount.TabIndex = 16;
+            this.nudSummaryWordCount.Value = new decimal(new int[] {
+            10,
+            0,
+            0,
+            0});
+            // 
+            // label5
+            // 
+            this.label5.AutoSize = true;
+            this.label5.Location = new System.Drawing.Point(245, 295);
+            this.label5.Name = "label5";
+            this.label5.Size = new System.Drawing.Size(100, 13);
+            this.label5.TabIndex = 17;
+            this.label5.Text = "Palavras do resumo";
             // 
             // ConfigForm
             // 
@@ -174,7 +208,9 @@ namespace NewsImpactRanker.WinForms.Forms
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(410, 345);
+            this.ClientSize = new System.Drawing.Size(410, 379);
+            this.Controls.Add(this.label5);
+            this.Controls.Add(this.nudSummaryWordCount);
             this.Controls.Add(this.cmbProvider);
             this.Controls.Add(this.labelProvider);
             this.Controls.Add(this.labelGemini);
@@ -198,6 +234,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             this.Text = "Configurações da IA";
             this.Load += new System.EventHandler(this.ConfigForm_Load);
+            ((System.ComponentModel.ISupportInitialize)(this.nudSummaryWordCount)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -219,5 +256,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.Label label4;
         private System.Windows.Forms.TextBox txtPromptFile;
         private System.Windows.Forms.Button btnBrowsePrompt;
+        private System.Windows.Forms.NumericUpDown nudSummaryWordCount;
+        private System.Windows.Forms.Label label5;
     }
 }

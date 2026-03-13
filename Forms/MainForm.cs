@@ -323,11 +323,11 @@ namespace NewsImpactRanker.WinForms.Forms
         private async Task ProcessSingleUrlAsync(string url)
         {
             // 👉 ETAPA A: CACHE DE URL
-//#if DEBUG
-//            bool isCached = false;
-//#else
+#if DEBUG
+            bool isCached = false;
+#else
             bool isCached = _evaluatedCache != null && _evaluatedCache.ContainsKey(url);
-// #endif
+#endif
 
             if (isCached)
             {
@@ -947,34 +947,37 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             var topicResults = new List<TopicResult>();
 
-            // 👉 SOLUÇÃO: Pega todos os nomes de tópicos que a IA já usou até agora
-            var allTopics = _allNewsScores
-                .SelectMany(n => n.Scores.Keys)
-                .Distinct()
-                .ToList();
-
-            foreach (var topic in allTopics)
+            // 1. Navegamos pelos códigos oficiais do seu TopicCatalog
+            foreach (var sigla in TopicCatalog.Codes)
             {
-                // Busca a notícia com maior nota para este tópico específico
+                // 2. Filtramos a notícia vencedora para esta sigla
                 var winner = _allNewsScores
-                    .Where(n => n.Scores.ContainsKey(topic) && n.Scores[topic] > 0)
-                    .OrderByDescending(n => n.Scores[topic])
+                    .Where(n => n.Scores.ContainsKey(sigla) && n.Scores[sigla] > 0)
+                    // REGRA DE OURO: A notícia só aparece na categoria onde teve sua nota MÁXIMA
+                    .Where(n => n.Scores.OrderByDescending(x => x.Value).FirstOrDefault().Key == sigla)
+                    .OrderByDescending(n => n.Scores[sigla])
                     .FirstOrDefault();
 
+                // 3. Se encontrou um vencedor, adiciona à Grid traduzindo o nome
                 if (winner != null)
                 {
+                    // Busca o nome amigável (Ex: "CS" -> "Ciência Controversa")
+                    string nomeCompleto = TopicCatalog.CodeToName.ContainsKey(sigla)
+                                          ? TopicCatalog.CodeToName[sigla]
+                                          : sigla;
+
                     topicResults.Add(new TopicResult
                     {
-                        Topic = topic,
+                        Topic = nomeCompleto,
                         Url = winner.Url,
-                        Score = winner.Scores[topic],
-                        Summary = winner.Summary, // Agora flui corretamente
+                        Score = winner.Scores[sigla],
+                        Summary = winner.Summary,
                         IsClicked = false
                     });
                 }
             }
 
-            // 👉 ORDENAÇÃO FINAL: Garante que as maiores notas fiquem no topo da Grid
+            // 4. Retorna a lista ordenada pelo Score (85 no topo, etc)
             return topicResults.OrderByDescending(r => r.Score).ToList();
         }
 
@@ -986,56 +989,129 @@ namespace NewsImpactRanker.WinForms.Forms
                 return;
             }
 
-            // 1. Limpa a Grid para evitar colunas duplicadas do Visual Studio
+            // 1. Configurações de Fonte e Estilo
+            // Você pode alterar o "12" para o tamanho que desejar (ex: 11, 14, etc)
+            Font fonteTexto = new Font("Segoe UI", 12f, FontStyle.Regular);
+            Font fonteCabecalho = new Font("Segoe UI", 11f, FontStyle.Bold);
+
             dgvTopicResults.DataSource = null;
             dgvTopicResults.Columns.Clear();
             dgvTopicResults.AutoGenerateColumns = false;
 
-            // 2. Coluna 1: Assunto (Tamanho adequado para o nome das categorias)
+            // 2. Aplica a fonte nas células e nos cabeçalhos
+            dgvTopicResults.DefaultCellStyle.Font = fonteTexto;
+            dgvTopicResults.ColumnHeadersDefaultCellStyle.Font = fonteCabecalho;
+
+            // IMPORTANTE: Ajusta a altura da linha para caber a fonte maior
+            dgvTopicResults.RowTemplate.Height = 35;
+
+            // 3. Campo 1: Assunto
             dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colTopic",
                 HeaderText = "Assunto",
                 DataPropertyName = "Topic",
-                Width = 150 // Ajuste se seus tópicos tiverem nomes muito longos
+                Width = 180 // Aumentei um pouco para compensar a fonte maior
             });
 
-            // 3. Coluna 2: Score (Bem pequena, centralizada)
+            // 4. Campo 2: Score
             dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colScore",
                 HeaderText = "Score",
                 DataPropertyName = "Score",
-                Width = 50,
-                DefaultCellStyle = new DataGridViewCellStyle { Alignment = DataGridViewContentAlignment.MiddleCenter }
+                Width = 60,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    Alignment = DataGridViewContentAlignment.MiddleCenter,
+                    Font = new Font(fonteTexto, FontStyle.Bold) // Score em negrito
+                }
             });
 
-            // 4. Coluna 3: Resumo (Espaço calculado para ~10 palavras)
+            // 5. Campo 3: Resumo
             dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colSummary",
                 HeaderText = "Resumo",
                 DataPropertyName = "Summary",
-                Width = 380 // Tamanho ideal para umas 10 a 15 palavras
+                Width = 450
             });
 
-            // 5. Coluna 4: URL (Preenche o resto da Grid até o final)
-            // 👉 IMPORTANTE: Mantivemos o nome "colTopicUrl" para o seu evento de clique não quebrar!
+            // 6. Campo 4: URL
             dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colTopicUrl",
                 HeaderText = "URL",
                 DataPropertyName = "Url",
-                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill // Mágica que estica até o final
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
             });
 
-            // 6. Configurações visuais extras para ficar agradável
-            dgvTopicResults.RowHeadersVisible = false; // Tira aquela setinha inútil da esquerda
+            // Estética adicional
+            dgvTopicResults.RowHeadersVisible = false;
             dgvTopicResults.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvTopicResults.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240); // Linhas alternadas para facilitar leitura
 
-            // 7. Joga os dados na tela
             dgvTopicResults.DataSource = results;
         }
+
+        //private void DisplayTopicResults(List<TopicResult> results)
+        //{
+        //    if (InvokeRequired)
+        //    {
+        //        Invoke(new Action<List<TopicResult>>(DisplayTopicResults), results);
+        //        return;
+        //    }
+
+        //    // 1. Limpa a Grid para evitar colunas duplicadas do Visual Studio
+        //    dgvTopicResults.DataSource = null;
+        //    dgvTopicResults.Columns.Clear();
+        //    dgvTopicResults.AutoGenerateColumns = false;
+
+        //    // 2. Coluna 1: Assunto (Tamanho adequado para o nome das categorias)
+        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+        //    {
+        //        Name = "colTopic",
+        //        HeaderText = "Assunto",
+        //        DataPropertyName = "Topic",
+        //        Width = 150 // Ajuste se seus tópicos tiverem nomes muito longos
+        //    });
+
+        //    // 3. Coluna 2: Score (Bem pequena, centralizada)
+        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+        //    {
+        //        Name = "colScore",
+        //        HeaderText = "Score",
+        //        DataPropertyName = "Score",
+        //        Width = 50,
+        //        DefaultCellStyle = new DataGridViewCellStyle { Alignment = DataGridViewContentAlignment.MiddleCenter }
+        //    });
+
+        //    // 4. Coluna 3: Resumo (Espaço calculado para ~10 palavras)
+        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+        //    {
+        //        Name = "colSummary",
+        //        HeaderText = "Resumo",
+        //        DataPropertyName = "Summary",
+        //        Width = 380 // Tamanho ideal para umas 10 a 15 palavras
+        //    });
+
+        //    // 5. Coluna 4: URL (Preenche o resto da Grid até o final)
+        //    // 👉 IMPORTANTE: Mantivemos o nome "colTopicUrl" para o seu evento de clique não quebrar!
+        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
+        //    {
+        //        Name = "colTopicUrl",
+        //        HeaderText = "URL",
+        //        DataPropertyName = "Url",
+        //        AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill // Mágica que estica até o final
+        //    });
+
+        //    // 6. Configurações visuais extras para ficar agradável
+        //    dgvTopicResults.RowHeadersVisible = false; // Tira aquela setinha inútil da esquerda
+        //    dgvTopicResults.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+
+        //    // 7. Joga os dados na tela
+        //    dgvTopicResults.DataSource = results;
+        //}
 
         private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
@@ -1083,7 +1159,8 @@ namespace NewsImpactRanker.WinForms.Forms
                                     DateAdded = DateTime.Now
                                 });
 
-                                SaveSummaryCache(); // Salva o JSON do cache de resumos
+                                SummaryCacheManager.SaveCache(_summaryCache);
+                                // SaveCache(); // Salva o JSON do cache de resumos
                                 LogService.Info($"[💾 CACHE SALVO] Resumo memorizado após clique: '{fullNewsItem.Summary}'");
                             }
                         }
@@ -1265,42 +1342,42 @@ namespace NewsImpactRanker.WinForms.Forms
         }
 
 
-        private void LoadSummaryCache()
-        {
-            try
-            {
-                if (File.Exists(_summaryCachePath))
-                {
-                    string json = File.ReadAllText(_summaryCachePath);
-                    _summaryCache = JsonConvert.DeserializeObject<List<SummaryCacheItem>>(json) ?? new List<SummaryCacheItem>();
+        //private void LoadSummaryCache()
+        //{
+        //    try
+        //    {
+        //        if (File.Exists(_summaryCachePath))
+        //        {
+        //            string json = File.ReadAllText(_summaryCachePath);
+        //            _summaryCache = JsonConvert.DeserializeObject<List<SummaryCacheItem>>(json) ?? new List<SummaryCacheItem>();
 
-                    LogService.Info($"[ANTI-DUPLICIDADE] Memória carregada: {_summaryCache.Count} resumos históricos prontos para o filtro.");
-                }
-                else
-                {
-                    LogService.Info("[ANTI-DUPLICIDADE] Arquivo de cache de resumos não encontrado (será criado na primeira duplicata ou sucesso).");
-                }
-            }
-            catch (Exception ex)
-            {
-                LogService.Error("[ANTI-DUPLICIDADE] Erro ao carregar cache de resumos.", ex);
-                _summaryCache = new List<SummaryCacheItem>();
-            }
-        }
+        //            LogService.Info($"[ANTI-DUPLICIDADE] Memória carregada: {_summaryCache.Count} resumos históricos prontos para o filtro.");
+        //        }
+        //        else
+        //        {
+        //            LogService.Info("[ANTI-DUPLICIDADE] Arquivo de cache de resumos não encontrado (será criado na primeira duplicata ou sucesso).");
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        LogService.Error("[ANTI-DUPLICIDADE] Erro ao carregar cache de resumos.", ex);
+        //        _summaryCache = new List<SummaryCacheItem>();
+        //    }
+        //}
 
-        private void SaveSummaryCache()
-        {
-            try
-            {
-                // Opcional: Aqui no futuro você pode colocar um código para apagar resumos mais velhos que 30 dias!
-                string json = JsonConvert.SerializeObject(_summaryCache, Newtonsoft.Json.Formatting.Indented);
-                File.WriteAllText(_summaryCachePath, json);
-            }
-            catch (Exception ex)
-            {
-                LogService.Error("[ANTI-DUPLICIDADE] Erro crítico ao salvar cache de resumos.", ex);
-            }
-        }
+        //private void SaveSummaryCache()
+        //{
+        //    try
+        //    {
+        //        // Opcional: Aqui no futuro você pode colocar um código para apagar resumos mais velhos que 30 dias!
+        //        string json = JsonConvert.SerializeObject(_summaryCache, Newtonsoft.Json.Formatting.Indented);
+        //        File.WriteAllText(_summaryCachePath, json);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        LogService.Error("[ANTI-DUPLICIDADE] Erro crítico ao salvar cache de resumos.", ex);
+        //    }
+        //}
 
         private void MainForm_Load(object sender, EventArgs e)
         {
@@ -1309,7 +1386,41 @@ namespace NewsImpactRanker.WinForms.Forms
             LoadEvaluatedCache();
 
             // 👉 CARREGA O NOVO CACHE AQUI:
-            LoadSummaryCache();
+            SummaryCacheManager.LoadCache();
         }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            var result = MessageBox.Show(
+                "Isso apagará TODO o histórico de resumos da IA e também limpará a lista de leitura atual da tela. Deseja continuar?",
+                "Limpeza Total",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (result == DialogResult.Yes)
+            {
+                try
+                {
+                    // 1. Limpa fisicamente usando a nova classe centralizada
+                    SummaryCacheManager.ClearCache();
+
+                    // 2. Limpa a lista na memória do MainForm para fazer efeito imediato
+                    if (_summaryCache != null) _summaryCache.Clear();
+
+                    // 3. Limpa a Grid e as pendências atuais
+                    if (_currentTopicResults != null) _currentTopicResults.Clear();
+                    SaveLastResults(); // Se você já tiver um LastResultsManager, melhor ainda!
+                    dgvTopicResults.DataSource = null;
+
+                    UpdateInfoLabel("Sistema e tela totalmente limpos!");
+                    MessageBox.Show("Todos os dados e resumos foram apagados!", "Sucesso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Erro ao limpar dados: " + ex.Message);
+                }
+            }
+        }
+
     }
 }

@@ -1,6 +1,9 @@
 using NewsImpactRanker.WinForms.Models;
+using NewsImpactRanker.WinForms.Services;
 using NewsImpactRanker.WinForms.Storage;
+using NewsImpactRanker.WinForms.Utils;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Security.Cryptography;
 using System.Windows.Forms;
@@ -37,10 +40,13 @@ namespace NewsImpactRanker.WinForms.Forms
                 cmbProvider.DataSource = Enum.GetValues(typeof(AiProvider));
                 cmbProvider.SelectedItem = config.SelectedProvider;
             }
+
+            nudSummaryWordCount.Value = config.SummaryWordCount > 0 ? config.SummaryWordCount : 10;
         }
 
         private void btnSave_Click(object sender, EventArgs e)
         {
+            int valorNaTela = (int)nudSummaryWordCount.Value;
             var config = new AppConfig
             {
                 AiApiKey = txtApiKey.Text.Trim(),
@@ -48,8 +54,36 @@ namespace NewsImpactRanker.WinForms.Forms
                 SelectedModel = txtModel.Text.Trim(),
                 PromptFilePath = txtPromptFile.Text.Trim(),
                 NewsFilePath = txtNewsFile.Text.Trim(),
-                SelectedProvider = (AiProvider)cmbProvider.SelectedItem
+                SelectedProvider = (AiProvider)cmbProvider.SelectedItem,
+                SummaryWordCount = valorNaTela
             };
+            bool wordCountChanged = config.SummaryWordCount != (int)nudSummaryWordCount.Value;
+
+            if (wordCountChanged)
+            {
+                // 2. Pergunta se ele tem certeza, já que isso vai apagar o histórico
+                var result = MessageBox.Show(
+                    "Você alterou o tamanho do resumo. Para o filtro anti-duplicidade funcionar corretamente, o histórico antigo de resumos precisará ser apagado. Deseja continuar?",
+                    "Aviso de Alteração",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+
+                if (result == DialogResult.No)
+                {
+                    return; // Cancela o salvamento e deixa o usuário na tela
+                }
+
+                try
+                {
+                    // 3. Chama o nosso novo Gerente para limpar o arquivo físico!
+                    SummaryCacheManager.ClearCache();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Erro ao limpar cache antigo: " + ex.Message);
+                    return;
+                }
+            }
 
             StorageManager.SaveConfig(config);
             this.Close();

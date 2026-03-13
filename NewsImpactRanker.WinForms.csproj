@@ -93,6 +93,7 @@
     <Compile Include="Services\ServiceResult.cs" />
     <Compile Include="Services\TokenUsageService.cs.cs" />
     <Compile Include="Storage\StorageManager.cs" />
+    <Compile Include="Utils\SummaryCacheManager.cs" />
     <Compile Include="Utils\UrlValidator.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

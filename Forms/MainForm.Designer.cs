@@ -61,7 +61,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.txtUrls.Multiline = true;
             this.txtUrls.Name = "txtUrls";
             this.txtUrls.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.txtUrls.Size = new System.Drawing.Size(893, 41);
+            this.txtUrls.Size = new System.Drawing.Size(1156, 41);
             this.txtUrls.TabIndex = 1;
             // 
             // btnStart
@@ -77,7 +77,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // btnConfig
             // 
             this.btnConfig.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnConfig.Location = new System.Drawing.Point(805, 129);
+            this.btnConfig.Location = new System.Drawing.Point(1068, 129);
             this.btnConfig.Name = "btnConfig";
             this.btnConfig.Size = new System.Drawing.Size(100, 23);
             this.btnConfig.TabIndex = 5;
@@ -91,14 +91,14 @@ namespace NewsImpactRanker.WinForms.Forms
             | System.Windows.Forms.AnchorStyles.Right)));
             this.progressBar.Location = new System.Drawing.Point(12, 158);
             this.progressBar.Name = "progressBar";
-            this.progressBar.Size = new System.Drawing.Size(854, 23);
+            this.progressBar.Size = new System.Drawing.Size(1117, 23);
             this.progressBar.TabIndex = 6;
             // 
             // lblProgress
             // 
             this.lblProgress.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lblProgress.AutoSize = true;
-            this.lblProgress.Location = new System.Drawing.Point(872, 168);
+            this.lblProgress.Location = new System.Drawing.Point(1135, 168);
             this.lblProgress.Name = "lblProgress";
             this.lblProgress.Size = new System.Drawing.Size(24, 13);
             this.lblProgress.TabIndex = 7;
@@ -124,7 +124,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.dgvResults.Name = "dgvResults";
             this.dgvResults.ReadOnly = true;
             this.dgvResults.RowHeadersVisible = false;
-            this.dgvResults.Size = new System.Drawing.Size(893, 390);
+            this.dgvResults.Size = new System.Drawing.Size(1156, 390);
             this.dgvResults.TabIndex = 8;
             this.dgvResults.Visible = false;
             this.dgvResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dgvResults_CellContentClick);
@@ -179,7 +179,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnOpenReport
             // 
-            this.btnOpenReport.Location = new System.Drawing.Point(649, 128);
+            this.btnOpenReport.Location = new System.Drawing.Point(912, 129);
             this.btnOpenReport.Name = "btnOpenReport";
             this.btnOpenReport.Size = new System.Drawing.Size(150, 25);
             this.btnOpenReport.TabIndex = 9;
@@ -189,7 +189,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnOpenLog
             // 
-            this.btnOpenLog.Location = new System.Drawing.Point(493, 128);
+            this.btnOpenLog.Location = new System.Drawing.Point(756, 129);
             this.btnOpenLog.Name = "btnOpenLog";
             this.btnOpenLog.Size = new System.Drawing.Size(150, 25);
             this.btnOpenLog.TabIndex = 10;
@@ -212,7 +212,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.dgvTopicResults.Name = "dgvTopicResults";
             this.dgvTopicResults.ReadOnly = true;
             this.dgvTopicResults.RowHeadersVisible = false;
-            this.dgvTopicResults.Size = new System.Drawing.Size(893, 390);
+            this.dgvTopicResults.Size = new System.Drawing.Size(1156, 390);
             this.dgvTopicResults.TabIndex = 999;
             this.dgvTopicResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dgvTopicResults_CellContentClick);
             // 
@@ -251,7 +251,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(917, 589);
+            this.ClientSize = new System.Drawing.Size(1180, 589);
             this.Controls.Add(this.lblInfo);
             this.Controls.Add(this.btnOpenLog);
             this.Controls.Add(this.btnOpenReport);

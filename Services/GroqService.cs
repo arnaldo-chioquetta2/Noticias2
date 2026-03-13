@@ -160,8 +160,14 @@ namespace NewsImpactRanker.WinForms.Services
 
         private async Task<ServiceResult<string>> SendRequestForTopicsAsync(string url, string jsonPayload)
         {
+            // 👉 A MÁGICA PARA O GROQ ACONTECE AQUI:
+            // Substituímos o valor fixo pelo configurado na tela de Settings.
+            // Como o 'Replace' de string troca TODAS as ocorrências, se aparecer 2 vezes, mudará as 2.
+            jsonPayload = jsonPayload.Replace("10 words", $"{_config.SummaryWordCount} words");
+
             try
             {
+                // Agora o StringContent já vai com o JSON "turbinado" com a contagem certa
                 using (var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json"))
                 using (var request = new HttpRequestMessage(HttpMethod.Post, url))
                 {
@@ -173,40 +179,13 @@ namespace NewsImpactRanker.WinForms.Services
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        // Verifica se é um erro 429 (Rate Limit Exceeded)
+                        // ... (mantenha sua lógica de Rate Limit 429 aqui igual) ...
                         if ((int)response.StatusCode == 429)
                         {
-                            // Extrair o tempo de espera do cabeçalho "retry-after" (em segundos)
-                            if (response.Headers.TryGetValues("retry-after", out var retryAfterValues))
-                            {
-                                if (int.TryParse(retryAfterValues.First(), out int retryAfterSeconds))
-                                {
-                                    int minutes = retryAfterSeconds / 60;
-                                    int seconds = retryAfterSeconds % 60;
-                                    return ServiceResult<string>.Fail($"Limite de uso atingido. Tente novamente em {minutes}m{seconds}s.");
-                                }
-                            }
-
-                            // Caso não tenha o cabeçalho, extrair da mensagem de erro
-                            var errorJson = JObject.Parse(responseBody);
-                            var errorMessage = errorJson["error"]?["message"]?.ToString();
-
-                            if (!string.IsNullOrEmpty(errorMessage))
-                            {
-                                var waitTimeMatch = System.Text.RegularExpressions.Regex.Match(errorMessage, @"in (\d+m\d+\.\d+s)");
-                                if (waitTimeMatch.Success)
-                                {
-                                    var waitTime = waitTimeMatch.Groups[1].Value;
-                                    return ServiceResult<string>.Fail($"Limite de uso atingido. Tente novamente em {waitTime}.");
-                                }
-                            }
-
-                            return ServiceResult<string>.Fail("Limite de uso atingido. Tente novamente mais tarde.");
+                            // [Seu código de captura de tempo de espera...]
                         }
-                        else
-                        {
-                            return ServiceResult<string>.Fail($"Erro Groq API: {response.StatusCode} - {responseBody}");
-                        }
+
+                        return ServiceResult<string>.Fail($"Erro Groq API: {response.StatusCode} - {responseBody}");
                     }
 
                     var result = JObject.Parse(responseBody);
@@ -215,6 +194,7 @@ namespace NewsImpactRanker.WinForms.Services
                     if (string.IsNullOrWhiteSpace(textResult))
                         return ServiceResult<string>.Fail("Groq retornou conteúdo vazio.");
 
+                    // Limpeza de blocos de código se a IA os retornar
                     int start = textResult.IndexOf('{');
                     int end = textResult.LastIndexOf('}');
 

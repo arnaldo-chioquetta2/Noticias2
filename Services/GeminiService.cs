@@ -19,14 +19,18 @@ public class GeminiService
     public async Task<(bool Success, dynamic Data, string ErrorMessage)> ClassifyNewsAsync(string text)
     {
         // METHOD v8: ClassifyNewsAsync (Gemini)
-        // Alteração: Remoção do campo response_mime_type para compatibilidade total com v1 e v1beta.
-
         var config = StorageManager.LoadConfig();
 
         if (string.IsNullOrWhiteSpace(config.GeminiApiKey))
             return (false, null, "Chave API do Gemini não configurada.");
 
+        // 1. Lê o prompt original do arquivo
         string promptSystem = File.ReadAllText(config.PromptFilePath);
+
+        // 👉 2. A MÁGICA DA INJEÇÃO: Substitui o limite fixo pelo limite dinâmico da tela
+        promptSystem = promptSystem.Replace("10 words", $"{config.SummaryWordCount} words");
+        // Dica extra: Se você tiver escrito "10 palavras" em português no prompt, mude o replace para:
+        // promptSystem = promptSystem.Replace("10 palavras", $"{config.SummaryWordCount} palavras");
 
         // Tentaremos usar a v1 (estável) para evitar erros de versão beta
         string url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={config.GeminiApiKey}";
@@ -35,17 +39,17 @@ public class GeminiService
         var requestBody = new
         {
             contents = new[] {
-            new {
-                parts = new[] {
-                    new { text = $"{promptSystem}\n\nARTICLE:\n{text}" }
-                }
+        new {
+            parts = new[] {
+                // Aqui o promptSystem já vai com o "9 words", "15 words", etc.
+                new { text = $"{promptSystem}\n\nARTICLE:\n{text}" }
             }
-        },
+        }
+    },
             generationConfig = new
             {
                 temperature = 0.1,
                 maxOutputTokens = 2048
-                // Removido response_mime_type para evitar o erro 400 "Unknown name"
             }
         };
 
@@ -70,8 +74,7 @@ public class GeminiService
 
             string rawText = resp.candidates[0].content.parts[0].text;
 
-            // Como removemos o 'MimeType', a IA pode ocasionalmente colocar ```json ... ```
-            // Vamos limpar isso antes de converter
+            // Limpa as marcações de código markdown do JSON
             string cleanJson = rawText.Replace("```json", "").Replace("```", "").Trim();
 
             var scores = JsonConvert.DeserializeObject<dynamic>(cleanJson);
