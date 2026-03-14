@@ -61,9 +61,9 @@ namespace NewsImpactRanker.WinForms.Services
             var payload = new
             {
                 // Ajustado para usar SelectedModel conforme o novo AppConfig
-                model = string.IsNullOrWhiteSpace(_config.SelectedModel)
-                        ? "llama-3.1-8b-instant"
-                        : _config.SelectedModel,
+                model = (string.IsNullOrWhiteSpace(_config.SelectedModel) || _config.SelectedModel.Contains("gemini"))
+            ? "llama-3.1-8b-instant"
+            : _config.SelectedModel,
 
                 messages = new[]
                 {

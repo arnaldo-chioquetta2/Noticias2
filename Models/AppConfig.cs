@@ -18,5 +18,7 @@
         public string PromptFilePath { get; set; }
         public string NewsFilePath { get; set; }
         public int SummaryWordCount { get; set; } = 10;
+        public string GroqModel { get; set; } = "llama-3.1-8b-instant";
+        public string GeminiModel { get; set; } = "gemini-2.0-flash";
     }
 }

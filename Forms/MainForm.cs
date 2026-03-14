@@ -20,7 +20,7 @@ namespace NewsImpactRanker.WinForms.Forms
     {
 
 #if DEBUG
-        private int _registroLimite = 5;
+        private int _registroLimite = 20;
 #else
         private int _registroLimite = 0;
 #endif
@@ -65,7 +65,11 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _iaErrorCount = 0;
         private int _scrapErrorCount = 0;
         private int _cacheHitCount = 0;
-        //private int _duplicateCount = 0;
+        // Cronômetro para saber até que horas o Groq deve ficar "de castigo"
+        private DateTime _groqCooldownUntil = DateTime.MinValue;
+
+        private int _groqSuccessCount = 0;
+        private int _geminiSuccessCount = 0;
 
         public MainForm()
         {
@@ -358,38 +362,83 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             var config = StorageManager.LoadConfig();
 
-            if (config.SelectedProvider == AiProvider.Groq)
-                await CheckAndDelayForTokenLimitAsync(rawText);
-            else
-                UpdateInfoLabel(GetFormattedStatus("Gemini processando..."));
-
             bool success = false;
             dynamic iaData = null;
             string errorMsg = "";
 
-            // 👉 ETAPA C: IA COM RETRY DE 3x
-            for (int i = 1; i <= 3; i++)
-            {
-                if (config.SelectedProvider == AiProvider.Gemini)
-                {
-                    var res = await _geminiService.ClassifyNewsAsync(rawText);
-                    success = res.Success; iaData = res.Data; errorMsg = res.ErrorMessage;
-                }
-                else
-                {
-                    var res = await _groqService.ClassifyNewsAsync(rawText);
-                    success = res.Success; iaData = res.Data; errorMsg = res.ErrorMessage;
-                }
+            // 1. Decisão inicial de qual provedor usar (considerando o Cooldown do Groq)
+            bool useGemini = config.SelectedProvider == AiProvider.Gemini;
 
-                if (success && iaData != null) break; // Sai do loop se deu certo
-                if (i < 3) await Task.Delay(2000); // Pausa antes de tentar de novo
+            if (config.SelectedProvider == AiProvider.Groq)
+            {
+                if (DateTime.Now < _groqCooldownUntil)
+                {
+                    LogService.Warn($"[⏳ COOLDOWN] Groq em descanso até {_groqCooldownUntil:HH:mm:ss}. Usando Gemini para {url}");
+                    useGemini = true;
+                }
             }
 
-            // 👉 ETAPA D: FILTRO ANTI-DUPLICIDADE SEMÂNTICA
-            if (success && iaData != null && iaData.scores != null)
+            // 2. Primeira tentativa de chamada da IA
+            if (useGemini)
             {
-                Dictionary<string, int> scores = JsonConvert.DeserializeObject<Dictionary<string, int>>(iaData.scores.ToString());
-                string summary = iaData.summary != null ? iaData.summary.ToString().Trim().ToLower() : "";
+                var res = await _geminiService.ClassifyNewsAsync(rawText);
+                success = res.Success; iaData = res.Data; errorMsg = res.ErrorMessage;
+            }
+            else
+            {
+                var res = await _groqService.ClassifyNewsAsync(rawText);
+                success = res.Success; iaData = res.Data; errorMsg = res.ErrorMessage;
+            }
+
+            // 3. Fallback: Se tentou o Groq e deu Rate Limit (429), pula pro Gemini na mesma hora
+            if (!success && !useGemini && errorMsg != null &&
+               (errorMsg.Contains("429") || errorMsg.Contains("Limite") || errorMsg.ToLower().Contains("too many requests")))
+            {
+                LogService.Error($"[GROQ LIMIT] Groq sobrecarregado! Acionando Gemini de emergência...");
+
+                // Põe o Groq de castigo
+                _groqCooldownUntil = DateTime.Now.AddSeconds(40);
+
+                // Tenta novamente agora com o Gemini
+                var fallbackRes = await _geminiService.ClassifyNewsAsync(rawText);
+                success = fallbackRes.Success;
+                iaData = fallbackRes.Data;
+                errorMsg = fallbackRes.ErrorMessage;
+
+                // 👉 IMPORTANTE: Atualiza a flag para que os logs e contadores abaixo saibam que foi o Gemini quem resolveu
+                useGemini = true;
+            }
+
+            // 4. Processamento dos dados em caso de sucesso
+            if (success && iaData != null)
+            {
+                Dictionary<string, int> scores = new Dictionary<string, int>();
+                string summary = "";
+
+                try
+                {
+                    // Normalização: Transforma qualquer retorno em JSON universal para evitar crash de maiúsculas/minúsculas
+                    string jsonUnificado = iaData is string ? (string)iaData : Newtonsoft.Json.JsonConvert.SerializeObject(iaData);
+                    var parsedData = Newtonsoft.Json.Linq.JObject.Parse(jsonUnificado);
+
+                    // Puxa as notas (Case-Insensitive)
+                    var tokenScores = parsedData.GetValue("scores", StringComparison.OrdinalIgnoreCase);
+                    if (tokenScores != null)
+                        scores = tokenScores.ToObject<Dictionary<string, int>>();
+
+                    // Puxa o resumo (Case-Insensitive)
+                    var tokenSummary = parsedData.GetValue("summary", StringComparison.OrdinalIgnoreCase);
+                    if (tokenSummary != null)
+                        summary = tokenSummary.ToString().Trim().ToLower();
+                }
+                catch (Exception ex)
+                {
+                    LogService.Error($"[PARSER ERRO] Falha ao processar JSON da IA para {url}: {ex.Message}");
+                    _iaErrorCount++;
+                    return;
+                }
+
+                // 5. Categoria Vencedora e Filtro Anti-Duplicidade
                 var topCategory = scores.OrderByDescending(x => x.Value).FirstOrDefault();
 
                 if (topCategory.Value > 0 && !string.IsNullOrWhiteSpace(summary))
@@ -403,21 +452,27 @@ namespace NewsImpactRanker.WinForms.Forms
                         LogService.Info($"[♻️ DEDUPLICAÇÃO] Notícia repetida ignorada por resumo: '{summary}'");
                         _duplicateCount++;
                         if (_currentExecutionUsesFile) RemoveUrlFromConfiguredFile(url);
-                        return; // Descarta e sai
+                        return;
                     }
                 }
 
-                // 👉 ETAPA E: SUCESSO FINAL
+                // 6. Finalização e Contabilização
+                // Definimos o nome correto para o log baseado em quem terminou a tarefa
+                string provedorFinal = useGemini ? "Gemini" : "Groq";
+                LogService.Info($"IA utilizada: {provedorFinal}");
+
+                if (useGemini) _geminiSuccessCount++; else _groqSuccessCount++;
+
                 HandleClassificationSuccess(url, title, scores, summary, false);
             }
             else
             {
-                _lastIaError = errorMsg ?? "Resposta inválida (JSON)";
-                LogService.Warn($"IA falhou para {url}: {_lastIaError}");
+                // Se após todas as tentativas falhou
+                _lastIaError = errorMsg ?? "Resposta vazia ou erro desconhecido";
+                LogService.Warn($"IA falhou definitivamente para {url}: {_lastIaError}");
                 _iaErrorCount++;
             }
         }
-
         /// <summary>
         /// Processa o sucesso de uma classificação, seja vinda da IA ou do Cache.
         /// </summary>
@@ -595,6 +650,16 @@ namespace NewsImpactRanker.WinForms.Forms
                 lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
                 lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
                 lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
+                lines.Add("");
+
+                // Exemplo de como adicionar no seu StringBuilder (sb) ou texto do relatório:
+                lines.Add("=== RESUMO DE PROCESSAMENTO ===");
+                lines.Add($"Total de Sucessos: {_successCount}");
+                lines.Add($"- Processados pelo Groq: {_groqSuccessCount}");
+                lines.Add($"- Processados pelo Gemini: {_geminiSuccessCount}");
+                lines.Add($"- Recuperados da Memória (Cache): {_cacheHitCount}");
+                lines.Add($"Falhas de IA: {_iaErrorCount}");
+                lines.Add($"Falhas de Scraping: {_scrapErrorCount}");
                 lines.Add("");
 
                 // --- DOMÍNIOS COM FALHA ---
@@ -1052,66 +1117,7 @@ namespace NewsImpactRanker.WinForms.Forms
             dgvTopicResults.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240); // Linhas alternadas para facilitar leitura
 
             dgvTopicResults.DataSource = results;
-        }
-
-        //private void DisplayTopicResults(List<TopicResult> results)
-        //{
-        //    if (InvokeRequired)
-        //    {
-        //        Invoke(new Action<List<TopicResult>>(DisplayTopicResults), results);
-        //        return;
-        //    }
-
-        //    // 1. Limpa a Grid para evitar colunas duplicadas do Visual Studio
-        //    dgvTopicResults.DataSource = null;
-        //    dgvTopicResults.Columns.Clear();
-        //    dgvTopicResults.AutoGenerateColumns = false;
-
-        //    // 2. Coluna 1: Assunto (Tamanho adequado para o nome das categorias)
-        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
-        //    {
-        //        Name = "colTopic",
-        //        HeaderText = "Assunto",
-        //        DataPropertyName = "Topic",
-        //        Width = 150 // Ajuste se seus tópicos tiverem nomes muito longos
-        //    });
-
-        //    // 3. Coluna 2: Score (Bem pequena, centralizada)
-        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
-        //    {
-        //        Name = "colScore",
-        //        HeaderText = "Score",
-        //        DataPropertyName = "Score",
-        //        Width = 50,
-        //        DefaultCellStyle = new DataGridViewCellStyle { Alignment = DataGridViewContentAlignment.MiddleCenter }
-        //    });
-
-        //    // 4. Coluna 3: Resumo (Espaço calculado para ~10 palavras)
-        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
-        //    {
-        //        Name = "colSummary",
-        //        HeaderText = "Resumo",
-        //        DataPropertyName = "Summary",
-        //        Width = 380 // Tamanho ideal para umas 10 a 15 palavras
-        //    });
-
-        //    // 5. Coluna 4: URL (Preenche o resto da Grid até o final)
-        //    // 👉 IMPORTANTE: Mantivemos o nome "colTopicUrl" para o seu evento de clique não quebrar!
-        //    dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
-        //    {
-        //        Name = "colTopicUrl",
-        //        HeaderText = "URL",
-        //        DataPropertyName = "Url",
-        //        AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill // Mágica que estica até o final
-        //    });
-
-        //    // 6. Configurações visuais extras para ficar agradável
-        //    dgvTopicResults.RowHeadersVisible = false; // Tira aquela setinha inútil da esquerda
-        //    dgvTopicResults.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-
-        //    // 7. Joga os dados na tela
-        //    dgvTopicResults.DataSource = results;
-        //}
+        }        
 
         private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
@@ -1339,45 +1345,7 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 LogService.Error("Erro ao carregar resultados pendentes.", ex);
             }
-        }
-
-
-        //private void LoadSummaryCache()
-        //{
-        //    try
-        //    {
-        //        if (File.Exists(_summaryCachePath))
-        //        {
-        //            string json = File.ReadAllText(_summaryCachePath);
-        //            _summaryCache = JsonConvert.DeserializeObject<List<SummaryCacheItem>>(json) ?? new List<SummaryCacheItem>();
-
-        //            LogService.Info($"[ANTI-DUPLICIDADE] Memória carregada: {_summaryCache.Count} resumos históricos prontos para o filtro.");
-        //        }
-        //        else
-        //        {
-        //            LogService.Info("[ANTI-DUPLICIDADE] Arquivo de cache de resumos não encontrado (será criado na primeira duplicata ou sucesso).");
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        LogService.Error("[ANTI-DUPLICIDADE] Erro ao carregar cache de resumos.", ex);
-        //        _summaryCache = new List<SummaryCacheItem>();
-        //    }
-        //}
-
-        //private void SaveSummaryCache()
-        //{
-        //    try
-        //    {
-        //        // Opcional: Aqui no futuro você pode colocar um código para apagar resumos mais velhos que 30 dias!
-        //        string json = JsonConvert.SerializeObject(_summaryCache, Newtonsoft.Json.Formatting.Indented);
-        //        File.WriteAllText(_summaryCachePath, json);
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        LogService.Error("[ANTI-DUPLICIDADE] Erro crítico ao salvar cache de resumos.", ex);
-        //    }
-        //}
+        }        
 
         private void MainForm_Load(object sender, EventArgs e)
         {
