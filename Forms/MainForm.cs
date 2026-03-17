@@ -20,7 +20,7 @@ namespace NewsImpactRanker.WinForms.Forms
     {
 
 #if DEBUG
-        private int _registroLimite = 20;
+        private int _registroLimite = 10;
 #else
         private int _registroLimite = 0;
 #endif

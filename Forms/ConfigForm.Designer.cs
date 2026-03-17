@@ -126,6 +126,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btnBrowse.Size = new System.Drawing.Size(75, 23);
             this.btnBrowse.TabIndex = 15;
             this.btnBrowse.Text = "Selecionar";
+            this.btnBrowse.Click += new System.EventHandler(this.btnBrowse_Click);
             // 
             // label4
             // 

@@ -7,13 +7,15 @@ namespace NewsImpactRanker.WinForms.Storage
 {
     public static class StorageManager
     {
+        // ?? 1. MUDANÇA AQUI: Criamos uma pasta exclusiva adicionando "_Science" no final
         private static readonly string AppDataPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "NewsImpactRanker"
+            "NewsImpactRanker_Science"
         );
 
-        public static readonly string ConfigPath = Path.Combine(AppDataPath, "config.json");
-        public static readonly string CachePath = Path.Combine(AppDataPath, "cache.json");
+        // ?? 2. MUDANÇA AQUI: Renomeamos os arquivos por precaução
+        public static readonly string ConfigPath = Path.Combine(AppDataPath, "config_science.json");
+        public static readonly string CachePath = Path.Combine(AppDataPath, "cache_science.json");
         public static readonly string LogsPath = Path.Combine(AppDataPath, "logs");
 
         static StorageManager()
