@@ -11,4 +11,6 @@ public class NewsScoresItem
     public int SourceOrder { get; set; }
 
     public string Summary { get; set; }
+
+    public string AiProvider { get; set; }
 }

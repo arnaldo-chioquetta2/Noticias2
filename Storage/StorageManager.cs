@@ -16,7 +16,8 @@ namespace NewsImpactRanker.WinForms.Storage
         // ?? 2. MUDANÇA AQUI: Renomeamos os arquivos por precaução
         public static readonly string ConfigPath = Path.Combine(AppDataPath, "config_science.json");
         public static readonly string CachePath = Path.Combine(AppDataPath, "cache_science.json");
-        public static readonly string LogsPath = Path.Combine(AppDataPath, "logs");
+        // public static readonly string LogsPath = Path.Combine(AppDataPath, "logs");
+        public static readonly string LogsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
 
         static StorageManager()
         {

@@ -70,6 +70,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private int _groqSuccessCount = 0;
         private int _geminiSuccessCount = 0;
+        // Variável global para rastrear os erros
+        //public Dictionary<string, string> _falhasProcessamento = new Dictionary<string, string>();
 
         public MainForm()
         {
@@ -133,6 +135,7 @@ namespace NewsImpactRanker.WinForms.Forms
             _iaErrorCount = 0;
             _scrapErrorCount = 0;
             _cacheHitCount = 0;
+            //_falhasProcessamento.Clear();
 
             LogService.Info("=== Processamento iniciado ===");
 
@@ -476,7 +479,7 @@ namespace NewsImpactRanker.WinForms.Forms
         /// <summary>
         /// Processa o sucesso de uma classificação, seja vinda da IA ou do Cache.
         /// </summary>
-        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores, string summary, bool fromCache = false)
+        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores, string summary, bool fromCache = false, string providerName = "IA")
         {
             NewsScoresItem item;
 
@@ -489,13 +492,22 @@ namespace NewsImpactRanker.WinForms.Forms
                     Title = title,
                     Scores = scores,
                     Summary = summary,
-                    SourceOrder = _allNewsScores.Count
+                    SourceOrder = _allNewsScores.Count,
+                    AiProvider = providerName // Agora o compilador vai aceitar!
                 };
 
                 if (!_allNewsScores.Any(n => n.Url == url))
                 {
                     _allNewsScores.Add(item);
-                    _successCount++;
+                    if (!fromCache) _successCount++;
+                }
+                else
+                {
+                    // Atualiza caso já exista (útil para recarregar do cache com novos dados)
+                    var existing = _allNewsScores.First(n => n.Url == url);
+                    existing.Scores = scores;
+                    existing.Summary = summary;
+                    existing.AiProvider = providerName;
                 }
             }
 
@@ -508,13 +520,35 @@ namespace NewsImpactRanker.WinForms.Forms
 
             UpdateStatusLabel();
 
-            // 4. Recálculo do Ranking e 👉 ORDENAÇÃO POR SCORE 👈
-            // Aqui é onde garantimos que o 85 suba e o 55 desça
-            var partialResults = SelectBestNewsPerTopic()
-                                 .OrderByDescending(r => r.Score) // Ordena do maior para o menor
-                                 .ToList();
+            // 3. RECONSTRUÇÃO DO RANKING (Lógica Multi-Categoria)
+            // Aqui garantimos que a notícia se espalhe por todos os tópicos que pontuou
+            List<TopicResult> partialResults = new List<TopicResult>();
 
-            // 5. Preservação do estado de "Lido" (IsClicked)
+            foreach (var news in _allNewsScores)
+            {
+                foreach (var s in news.Scores)
+                {
+                    if (s.Value > 0)
+                    {
+                        partialResults.Add(new TopicResult
+                        {
+                            Topic = s.Key,
+                            Url = news.Url,
+                            Score = s.Value,
+                            Summary = news.Summary,
+                            AiProvider = news.AiProvider
+                        });
+                    }
+                }
+            }
+
+            // Ordenação: Alfabética por Tópico e depois maior Score no topo
+            partialResults = partialResults
+                .OrderBy(r => r.Topic)
+                .ThenByDescending(r => r.Score)
+                .ToList();
+
+            // 4. Preservação do estado de "Lido" (IsClicked)
             foreach (var novoResultado in partialResults)
             {
                 var antigo = _currentTopicResults.FirstOrDefault(r => r.Url == novoResultado.Url && r.Topic == novoResultado.Topic);
@@ -524,17 +558,23 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // 6. Atualiza a lista global e salva o estado
+            // 5. Atualiza a lista global e salva o estado
             _currentTopicResults = partialResults;
             SaveLastResults();
 
-            // 7. Atualiza a Grid (apenas o que não foi lido)
+            // 6. Atualiza a Grid (apenas o que não foi lido)
             var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked).ToList();
             DisplayTopicResults(itensParaMostrar);
 
             if (!fromCache)
             {
-                LogService.Info($"[OK] Notícia classificada e reordenada: {url}");
+                LogService.Info($"[OK] ({providerName}) Notícia classificada e distribuída: {url}");
+
+                // Se estiver processando lote de arquivo, limpa a linha do TXT
+                if (_currentExecutionUsesFile)
+                {
+                    RemoveUrlFromConfiguredFile(url);
+                }
             }
         }
 
@@ -671,6 +711,25 @@ namespace NewsImpactRanker.WinForms.Forms
                         foreach (var d in _failedDomains.Distinct())
                             lines.Add($"❌ {d}");
                     }
+                }
+
+                // Na hora de montar o relatório final (seu StringBuilder sb):
+                lines.Add("\n=======================================================");
+                lines.Add("📋 NOTÍCIAS NÃO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
+                lines.Add("=======================================================\n");
+
+                if (LogService.FalhasProcessamento.Count == 0)
+                {
+                    lines.Add("Nenhuma falha registrada! Todas as URLs funcionaram.");
+                }
+                else
+                {
+                    foreach (var falha in LogService.FalhasProcessamento)
+                    {
+                        lines.Add($"URL: {falha.Key}");
+                        lines.Add($"Motivo: {falha.Value}\n");
+                    }
+                    lines.Add($"Total de falhas registradas: {LogService.FalhasProcessamento.Count}");
                 }
 
                 File.WriteAllLines(_lastReportPath, lines);

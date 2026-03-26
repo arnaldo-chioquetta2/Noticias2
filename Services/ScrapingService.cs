@@ -136,6 +136,7 @@ namespace NewsImpactRanker.WinForms.Services
                     {
                         // Se for 404 ou 403, geralmente não adianta tentar novamente no loop
                         LogService.Warn($"HTTP {(int)response.StatusCode} para {url}");
+                        LogService.AddFalha(url, $"Bloqueado pelo site (Erro HTTP {(int)response.StatusCode}). O site pode estar protegido contra robôs.");
                         return null;
                     }
 

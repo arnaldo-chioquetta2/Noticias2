@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Collections.Generic;
 using NewsImpactRanker.WinForms.Storage;
 
 namespace NewsImpactRanker.WinForms.Services
@@ -9,6 +10,7 @@ namespace NewsImpactRanker.WinForms.Services
         private static readonly object _lock = new object();
         private static bool _initialized = false;
         private static string _logFilePath;
+        public static Dictionary<string, string> FalhasProcessamento { get; } = new Dictionary<string, string>();
 
         static LogService()
         {
@@ -24,6 +26,14 @@ namespace NewsImpactRanker.WinForms.Services
             {
                 _initialized = false;
                 Console.WriteLine($"[LOG FALHOU] {ex.Message}");
+            }
+        }
+
+        public static void AddFalha(string url, string motivo)
+        {
+            lock (FalhasProcessamento)
+            {
+                FalhasProcessamento[url] = motivo;
             }
         }
 
