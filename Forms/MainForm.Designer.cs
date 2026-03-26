@@ -256,7 +256,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btZeraCache.TabIndex = 1001;
             this.btZeraCache.Text = "Zerar o cache";
             this.btZeraCache.UseVisualStyleBackColor = true;
-            this.btZeraCache.Click += new System.EventHandler(this.btZeraCache_Click);
+            //this.btZeraCache.Click += new System.EventHandler(this.btZeraCache_Click);
             // 
             // MainForm
             // 

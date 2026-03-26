@@ -602,136 +602,26 @@ namespace NewsImpactRanker.WinForms.Forms
             lblInfo.Text = $"✅ Sucesso: {_successCount} | ♻️ Duplicadas: {_duplicateCount} | ⚡ Cache: {_cacheHitCount} | 🤖 Erros IA: {_iaErrorCount}";
         }
 
+        // 
+
         private void SaveFinalRankingToFile(List<TopicResult> results)
         {
-            // METHOD v2: SaveFinalRankingToFile
-            // Alteração: Inclusão da seção de Tópicos Monitorados e estatísticas por categoria.
             try
             {
                 string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-
-                _lastReportPath = Path.Combine(
-                    folder,
-                    $"NewsRanking_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
-                );
+                _lastReportPath = Path.Combine(folder, $"NewsRanking_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
 
                 var lines = new List<string>();
 
-                lines.Add("================================================");
-                lines.Add("         NEWS TOPIC RANKING REPORT              ");
-                lines.Add("================================================");
-                lines.Add($"Data: {DateTime.Now}");
-                lines.Add($"IA Utilizada: {StorageManager.LoadConfig().SelectedProvider}");
-                lines.Add("");
+                // 1. Constrói cada seção do relatório
+                AddReportHeader(lines);
+                AddMonitoredTopicsSection(lines);
+                AddRankingSection(lines, results);
+                AddExecutionSummarySection(lines);
+                AddFailedDomainsSection(lines);
+                AddFailuresSection(lines);
 
-                // --- NOVA SEÇÃO: TÓPICOS MONITORADOS ---
-                lines.Add("===== TÓPICOS MONITORADOS =====");
-                if (_allNewsScores.Any())
-                {
-                    // Pegamos as chaves (nomes dos tópicos) da primeira notícia com sucesso
-                    var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
-                    foreach (var topicName in allTopics)
-                    {
-                        // Conta quantas notícias bateram nesse tópico (score > 0)
-                        int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
-                        lines.Add($"- {topicName.PadRight(30)} ({count} notícias encontradas)");
-                    }
-                }
-                else
-                {
-                    lines.Add("Nenhum tópico processado.");
-                }
-                lines.Add("");
-
-                lines.Add("===== MELHORES POR ASSUNTO (RANKING) =====");
-                lines.Add("");
-
-                if (results.Count == 0)
-                {
-                    lines.Add("Nenhuma notícia atingiu os critérios mínimos para o ranking.");
-                }
-                else
-                {
-                    foreach (var r in results)
-                    {
-                        lines.Add($"📌 TÓPICO: {r.Topic.ToUpper()}");
-                        lines.Add($"⭐ SCORE : {r.Score}");
-                        lines.Add($"🔗 URL   : {r.Url}");
-                        lines.Add($"📄 TÍTULO: {r.Title}");
-                        lines.Add(new string('-', 40));
-                    }
-                }
-
-                lines.Add("");
-                lines.Add("===== RESUMO DA EXECUÇÃO =====");
-                lines.Add($"Total de URLs analisadas      : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
-                lines.Add($"Sucessos de Classificação     : {_allNewsScores.Count}");
-                lines.Add($"Falhas de IA (🤖)            : {_iaErrorCount}");
-                lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
-                lines.Add($"Tópicos com match no Ranking  : {results.Count}");
-                lines.Add("");
-
-                lines.Add("===== RESUMO DA EXECUÇÃO =====");
-                lines.Add($"Total de URLs processadas     : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
-                lines.Add($"Sucessos Totais (IA + Cache)  : {_successCount}");
-                lines.Add($"   -> Desse total, via Cache  : {_cacheHitCount} ⚡"); // 👉 NOVO NO TXT
-                lines.Add($"Falhas de IA (🤖)             : {_iaErrorCount}");
-                lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
-                lines.Add($"Tópicos com match no Ranking  : {results.Count}");
-                lines.Add("");
-
-                // ... dentro do método SaveFinalRankingToFile ...
-                lines.Add("");
-                lines.Add("===== RESUMO DA EXECUÇÃO =====");
-                lines.Add($"Total de URLs Processadas       : {progressBar.Value}");
-                lines.Add($"Sucessos de Ranking (Inéditas)  : {_successCount - _cacheHitCount}");
-                lines.Add($"Reaproveitadas via Cache (⚡)   : {_cacheHitCount}");
-                lines.Add($"Descartadas por Duplicidade (♻️) : {_duplicateCount}"); // 👉 NOVO
-                lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
-                lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
-                lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
-                lines.Add("");
-
-                // Exemplo de como adicionar no seu StringBuilder (sb) ou texto do relatório:
-                lines.Add("=== RESUMO DE PROCESSAMENTO ===");
-                lines.Add($"Total de Sucessos: {_successCount}");
-                lines.Add($"- Processados pelo Groq: {_groqSuccessCount}");
-                lines.Add($"- Processados pelo Gemini: {_geminiSuccessCount}");
-                lines.Add($"- Recuperados da Memória (Cache): {_cacheHitCount}");
-                lines.Add($"Falhas de IA: {_iaErrorCount}");
-                lines.Add($"Falhas de Scraping: {_scrapErrorCount}");
-                lines.Add("");
-
-                // --- DOMÍNIOS COM FALHA ---
-                lock (_failedDomainsLock)
-                {
-                    if (_failedDomains.Any())
-                    {
-                        lines.Add("===== DOMÍNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
-                        foreach (var d in _failedDomains.Distinct())
-                            lines.Add($"❌ {d}");
-                    }
-                }
-
-                // Na hora de montar o relatório final (seu StringBuilder sb):
-                lines.Add("\n=======================================================");
-                lines.Add("📋 NOTÍCIAS NÃO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
-                lines.Add("=======================================================\n");
-
-                if (LogService.FalhasProcessamento.Count == 0)
-                {
-                    lines.Add("Nenhuma falha registrada! Todas as URLs funcionaram.");
-                }
-                else
-                {
-                    foreach (var falha in LogService.FalhasProcessamento)
-                    {
-                        lines.Add($"URL: {falha.Key}");
-                        lines.Add($"Motivo: {falha.Value}\n");
-                    }
-                    lines.Add($"Total de falhas registradas: {LogService.FalhasProcessamento.Count}");
-                }
-
+                // 2. Salva o arquivo final
                 File.WriteAllLines(_lastReportPath, lines);
                 LogService.Info($"Relatório completo salvo em: {_lastReportPath}");
             }
@@ -740,6 +630,253 @@ namespace NewsImpactRanker.WinForms.Forms
                 LogService.Error("Erro ao gerar relatório final", ex);
             }
         }
+
+        // ==============================================
+        // SUB-MÉTODOS DE GERAÇÃO DO RELATÓRIO
+        // ==============================================
+
+        private void AddReportHeader(List<string> lines)
+        {
+            lines.Add("================================================");
+            lines.Add("         NEWS TOPIC RANKING REPORT              ");
+            lines.Add("================================================");
+            lines.Add($"Data: {DateTime.Now}");
+            lines.Add($"IA Utilizada: {StorageManager.LoadConfig().SelectedProvider}");
+            lines.Add("");
+        }
+
+        private void AddMonitoredTopicsSection(List<string> lines)
+        {
+            lines.Add("===== TÓPICOS MONITORADOS =====");
+            if (_allNewsScores.Any())
+            {
+                var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
+                foreach (var topicName in allTopics)
+                {
+                    int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
+                    lines.Add($"- {topicName.PadRight(30)} ({count} notícias encontradas)");
+                }
+            }
+            else
+            {
+                lines.Add("Nenhum tópico processado.");
+            }
+            lines.Add("");
+        }
+
+        private void AddRankingSection(List<string> lines, List<TopicResult> results)
+        {
+            lines.Add("===== MELHORES POR ASSUNTO (RANKING) =====");
+            lines.Add("");
+
+            if (results.Count == 0)
+            {
+                lines.Add("Nenhuma notícia atingiu os critérios mínimos para o ranking.");
+            }
+            else
+            {
+                foreach (var r in results)
+                {
+                    lines.Add($"📌 TÓPICO: {r.Topic.ToUpper()}");
+                    lines.Add($"⭐ SCORE : {r.Score}");
+                    lines.Add($"🔗 URL   : {r.Url}");
+                    lines.Add($"📄 TÍTULO: {r.Title}");
+                    lines.Add(new string('-', 40));
+                }
+            }
+            lines.Add("");
+        }
+
+        private void AddExecutionSummarySection(List<string> lines)
+        {
+            lines.Add("===== RESUMO DA EXECUÇÃO =====");
+            lines.Add($"Total de URLs Processadas       : {progressBar.Value}");
+            lines.Add($"Sucessos de Ranking (Inéditas)  : {_successCount - _cacheHitCount}");
+            lines.Add($"Reaproveitadas via Cache (⚡)   : {_cacheHitCount}");
+            lines.Add($"Descartadas por Duplicidade (♻️) : {_duplicateCount}");
+            lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
+            lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
+            lines.Add($"- Processados pelo Groq         : {_groqSuccessCount}");
+            lines.Add($"- Processados pelo Gemini       : {_geminiSuccessCount}");
+            lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
+            lines.Add("");
+        }
+
+        private void AddFailedDomainsSection(List<string> lines)
+        {
+            lock (_failedDomainsLock)
+            {
+                if (_failedDomains.Any())
+                {
+                    lines.Add("===== DOMÍNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
+                    foreach (var d in _failedDomains.Distinct())
+                    {
+                        lines.Add($"❌ {d}");
+                    }
+                    lines.Add("");
+                }
+            }
+        }
+
+        private void AddFailuresSection(List<string> lines)
+        {
+            lines.Add("=======================================================");
+            lines.Add("📋 NOTÍCIAS NÃO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
+            lines.Add("=======================================================\n");
+
+            if (LogService.FalhasProcessamento.Count == 0)
+            {
+                lines.Add("Nenhuma falha registrada! Todas as URLs funcionaram.");
+            }
+            else
+            {
+                foreach (var falha in LogService.FalhasProcessamento)
+                {
+                    lines.Add($"URL: {falha.Key}");
+                    lines.Add($"Motivo: {falha.Value}\n");
+                }
+                lines.Add($"Total de falhas registradas: {LogService.FalhasProcessamento.Count}");
+            }
+        }
+
+        //private void SaveFinalRankingToFile(List<TopicResult> results)
+        //{
+        //    // METHOD v2: SaveFinalRankingToFile
+        //    // Alteração: Inclusão da seção de Tópicos Monitorados e estatísticas por categoria.
+        //    try
+        //    {
+        //        string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+        //        _lastReportPath = Path.Combine(
+        //            folder,
+        //            $"NewsRanking_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
+        //        );
+
+        //        var lines = new List<string>();
+
+        //        lines.Add("================================================");
+        //        lines.Add("         NEWS TOPIC RANKING REPORT              ");
+        //        lines.Add("================================================");
+        //        lines.Add($"Data: {DateTime.Now}");
+        //        lines.Add($"IA Utilizada: {StorageManager.LoadConfig().SelectedProvider}");
+        //        lines.Add("");
+
+        //        // --- NOVA SEÇÃO: TÓPICOS MONITORADOS ---
+        //        lines.Add("===== TÓPICOS MONITORADOS =====");
+        //        if (_allNewsScores.Any())
+        //        {
+        //            // Pegamos as chaves (nomes dos tópicos) da primeira notícia com sucesso
+        //            var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
+        //            foreach (var topicName in allTopics)
+        //            {
+        //                // Conta quantas notícias bateram nesse tópico (score > 0)
+        //                int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
+        //                lines.Add($"- {topicName.PadRight(30)} ({count} notícias encontradas)");
+        //            }
+        //        }
+        //        else
+        //        {
+        //            lines.Add("Nenhum tópico processado.");
+        //        }
+        //        lines.Add("");
+
+        //        lines.Add("===== MELHORES POR ASSUNTO (RANKING) =====");
+        //        lines.Add("");
+
+        //        if (results.Count == 0)
+        //        {
+        //            lines.Add("Nenhuma notícia atingiu os critérios mínimos para o ranking.");
+        //        }
+        //        else
+        //        {
+        //            foreach (var r in results)
+        //            {
+        //                lines.Add($"📌 TÓPICO: {r.Topic.ToUpper()}");
+        //                lines.Add($"⭐ SCORE : {r.Score}");
+        //                lines.Add($"🔗 URL   : {r.Url}");
+        //                lines.Add($"📄 TÍTULO: {r.Title}");
+        //                lines.Add(new string('-', 40));
+        //            }
+        //        }
+
+        //        lines.Add("");
+        //        lines.Add("===== RESUMO DA EXECUÇÃO =====");
+        //        lines.Add($"Total de URLs analisadas      : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
+        //        lines.Add($"Sucessos de Classificação     : {_allNewsScores.Count}");
+        //        lines.Add($"Falhas de IA (🤖)            : {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
+        //        lines.Add($"Tópicos com match no Ranking  : {results.Count}");
+        //        lines.Add("");
+
+        //        lines.Add("===== RESUMO DA EXECUÇÃO =====");
+        //        lines.Add($"Total de URLs processadas     : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
+        //        lines.Add($"Sucessos Totais (IA + Cache)  : {_successCount}");
+        //        lines.Add($"   -> Desse total, via Cache  : {_cacheHitCount} ⚡"); // 👉 NOVO NO TXT
+        //        lines.Add($"Falhas de IA (🤖)             : {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
+        //        lines.Add($"Tópicos com match no Ranking  : {results.Count}");
+        //        lines.Add("");
+
+        //        // ... dentro do método SaveFinalRankingToFile ...
+        //        lines.Add("");
+        //        lines.Add("===== RESUMO DA EXECUÇÃO =====");
+        //        lines.Add($"Total de URLs Processadas       : {progressBar.Value}");
+        //        lines.Add($"Sucessos de Ranking (Inéditas)  : {_successCount - _cacheHitCount}");
+        //        lines.Add($"Reaproveitadas via Cache (⚡)   : {_cacheHitCount}");
+        //        lines.Add($"Descartadas por Duplicidade (♻️) : {_duplicateCount}"); // 👉 NOVO
+        //        lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
+        //        lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
+        //        lines.Add("");
+
+        //        // Exemplo de como adicionar no seu StringBuilder (sb) ou texto do relatório:
+        //        lines.Add("=== RESUMO DE PROCESSAMENTO ===");
+        //        lines.Add($"Total de Sucessos: {_successCount}");
+        //        lines.Add($"- Processados pelo Groq: {_groqSuccessCount}");
+        //        lines.Add($"- Processados pelo Gemini: {_geminiSuccessCount}");
+        //        lines.Add($"- Recuperados da Memória (Cache): {_cacheHitCount}");
+        //        lines.Add($"Falhas de IA: {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping: {_scrapErrorCount}");
+        //        lines.Add("");
+
+        //        // --- DOMÍNIOS COM FALHA ---
+        //        lock (_failedDomainsLock)
+        //        {
+        //            if (_failedDomains.Any())
+        //            {
+        //                lines.Add("===== DOMÍNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
+        //                foreach (var d in _failedDomains.Distinct())
+        //                    lines.Add($"❌ {d}");
+        //            }
+        //        }
+
+        //        // Na hora de montar o relatório final (seu StringBuilder sb):
+        //        lines.Add("\n=======================================================");
+        //        lines.Add("📋 NOTÍCIAS NÃO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
+        //        lines.Add("=======================================================\n");
+
+        //        if (LogService.FalhasProcessamento.Count == 0)
+        //        {
+        //            lines.Add("Nenhuma falha registrada! Todas as URLs funcionaram.");
+        //        }
+        //        else
+        //        {
+        //            foreach (var falha in LogService.FalhasProcessamento)
+        //            {
+        //                lines.Add($"URL: {falha.Key}");
+        //                lines.Add($"Motivo: {falha.Value}\n");
+        //            }
+        //            lines.Add($"Total de falhas registradas: {LogService.FalhasProcessamento.Count}");
+        //        }
+
+        //        File.WriteAllLines(_lastReportPath, lines);
+        //        LogService.Info($"Relatório completo salvo em: {_lastReportPath}");
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        LogService.Error("Erro ao gerar relatório final", ex);
+        //    }
+        //}
 
         // ✅ Adicionar este método na classe MainForm se ainda não existir
         private string ExtractDomain(string url)
