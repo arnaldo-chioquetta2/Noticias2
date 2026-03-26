@@ -1,11 +1,10 @@
-﻿// Services/GeminiService.cs
-using NewsImpactRanker.WinForms.Storage;
-using Newtonsoft.Json;
-using System;
+﻿using System;
 using System.IO;
-using System.Net.Http;
 using System.Text;
+using Newtonsoft.Json;
+using System.Net.Http;
 using System.Threading.Tasks;
+using NewsImpactRanker.WinForms.Storage;
 
 public class GeminiService
 {

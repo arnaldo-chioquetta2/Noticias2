@@ -40,6 +40,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colTopicUrl = new System.Windows.Forms.DataGridViewLinkColumn();
             this.colTopicScore = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.lblInfo = new System.Windows.Forms.Label();
+            this.btZeraCache = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).BeginInit();
             this.SuspendLayout();
@@ -247,11 +248,22 @@ namespace NewsImpactRanker.WinForms.Forms
             this.lblInfo.Text = ".";
             this.lblInfo.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
+            // btZeraCache
+            // 
+            this.btZeraCache.Location = new System.Drawing.Point(600, 129);
+            this.btZeraCache.Name = "btZeraCache";
+            this.btZeraCache.Size = new System.Drawing.Size(150, 25);
+            this.btZeraCache.TabIndex = 1001;
+            this.btZeraCache.Text = "Zerar o cache";
+            this.btZeraCache.UseVisualStyleBackColor = true;
+            this.btZeraCache.Click += new System.EventHandler(this.btZeraCache_Click);
+            // 
             // MainForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(1180, 589);
+            this.Controls.Add(this.btZeraCache);
             this.Controls.Add(this.lblInfo);
             this.Controls.Add(this.btnOpenLog);
             this.Controls.Add(this.btnOpenReport);
@@ -297,5 +309,6 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.DataGridViewLinkColumn colTopicUrl;
         private System.Windows.Forms.DataGridViewTextBoxColumn colTopicScore;
         private Label lblInfo;
+        private Button btZeraCache;
     }
 }

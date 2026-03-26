@@ -1449,5 +1449,47 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
+        private void btnLimparCache_Click(object sender, EventArgs e)
+        {
+            var confirmacao = MessageBox.Show(
+                "Isso removerá todos os resultados salvos anteriormente e forçará a IA a reprocessar tudo. Deseja continuar?",
+                "Limpar Cache Completo",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (confirmacao == DialogResult.Yes)
+            {
+                try
+                {
+                    // 1. Limpa as listas na Memória RAM
+                    _evaluatedCache.Clear();
+                    _summaryCache.Clear();
+                    _currentTopicResults.Clear();
+                    _allNewsScores.Clear();
+
+                    // 2. Apaga os arquivos físicos no Disco
+                    if (File.Exists(_cachePath)) File.Delete(_cachePath);
+                    if (File.Exists(_summaryCachePath)) File.Delete(_summaryCachePath);
+                    if (File.Exists(_lastResultsPath)) File.Delete(_lastResultsPath);
+
+                    // 3. Notifica o Log e o Usuário
+                    LogService.Info("🧹 Faxina completa realizada! Caches de avaliação e sumários foram removidos.");
+
+                    // Zera os contadores da tela para o próximo processamento parecer "limpo"
+                    _processedCount = 0;
+                    _successCount = 0;
+                    _cacheHitCount = 0;
+                    _iaErrorCount = 0;
+
+                    MessageBox.Show("Caches apagados com sucesso! O próximo processamento será 100% novo.", "Sucesso");
+                }
+                catch (Exception ex)
+                {
+                    LogService.Error($"Erro ao limpar cache: {ex.Message}");
+                    MessageBox.Show("Erro ao apagar arquivos de cache. Verifique se eles não estão abertos em outro programa.");
+                }
+            }
+        }
     }
+
 }
