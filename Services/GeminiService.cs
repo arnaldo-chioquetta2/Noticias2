@@ -30,7 +30,7 @@ public class GeminiService
             promptSystem = promptSystem.Replace("10 words", $"{config.SummaryWordCount} words");
             promptSystem = promptSystem.Replace("10 palavras", $"{config.SummaryWordCount} palavras");
 
-            string url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={config.GeminiApiKey}";
+            string url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={config.GeminiApiKey}";
 
             // 2. Monta o Payload com limite de 2048 tokens (fôlego de sobra)
             var requestBody = new
@@ -45,9 +45,10 @@ public class GeminiService
                 generationConfig = new
                 {
                     temperature = 0.1, // Mantém a resposta técnica e menos criativa
-                    maxOutputTokens = 2048
+                    maxOutputTokens = 3072 // Ajustado porque estava dando erro : Limite de Tokens (Unterminated String)
                 }
             };
+            // maxOutputTokens = 2048
 
             string jsonPayload = JsonConvert.SerializeObject(requestBody);
             var response = await _httpClient.PostAsync(url, new StringContent(jsonPayload, Encoding.UTF8, "application/json"));
@@ -77,7 +78,7 @@ public class GeminiService
             catch (JsonReaderException jex)
             {
                 // Se o JSON estiver quebrado (o erro de 'Unterminated string' cai aqui)
-                return (false, null, $"JSON Corrompido pela IA: {jex.Message}. Texto recebido: {cleanJson.Substring(0, Math.Min(cleanJson.Length, 100))}...");
+                return (false, null, $"JSON Corrompido pela IA Gemini: {jex.Message}. Texto recebido: {cleanJson.Substring(0, Math.Min(cleanJson.Length, 100))}...");
             }
         }
         catch (Exception ex)

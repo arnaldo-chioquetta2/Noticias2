@@ -115,7 +115,7 @@ namespace NewsImpactRanker.WinForms.Services
                     }
                     catch
                     {
-                        return ServiceResult<TopicScoresResponse>.Fail("JSON da IA está malformado e não pôde ser recuperado.");
+                        return ServiceResult<TopicScoresResponse>.Fail($"JSON Corrompido pelo Groq: {ex.Message}. Texto: {content.Substring(0, Math.Min(content.Length, 150))}...");
                     }
                 }
             }

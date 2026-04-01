@@ -25,8 +25,8 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _registroLimite = 0;
 #endif
 
-        private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults.json"); 
-        private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
+        //private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults.json"); 
+        //private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
         private List<TopicResult> _currentTopicResults = new List<TopicResult>();
         private Dictionary<string, NewsScoresItem> _evaluatedCache = new Dictionary<string, NewsScoresItem>();
 
@@ -56,7 +56,6 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _duplicateCount = 0;
 
         // 👉 VARIÁVEIS DO FILTRO ANTI-DUPLICIDADE
-        private string _summaryCachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_SummaryCache.json");
         private List<SummaryCacheItem> _summaryCache = new List<SummaryCacheItem>();
 
 
@@ -72,6 +71,10 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _geminiSuccessCount = 0;
         // Variável global para rastrear os erros
         //public Dictionary<string, string> _falhasProcessamento = new Dictionary<string, string>();
+
+        private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults_v2.json");
+        private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache_v2.json");
+        private string _summaryCachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_SummaryCache_v2.json");
 
         public MainForm()
         {
@@ -1204,37 +1207,49 @@ namespace NewsImpactRanker.WinForms.Forms
             return urls;
         }
 
-        private List<TopicResult> SelectBestNewsPerTopic()
+        private List<TopicResult> SelectBestNewsPerTopic(int minimumScore)
         {
             var topicResults = new List<TopicResult>();
+
+            // Rastreador: Impede que a MESMA notícia ocupe duas linhas no Grid final
+            var usedNewsUrls = new HashSet<string>();
 
             // 1. Navegamos pelos códigos oficiais do seu TopicCatalog
             foreach (var sigla in TopicCatalog.Codes)
             {
-                // 2. Filtramos a notícia vencedora para esta sigla
-                var winner = _allNewsScores
-                    .Where(n => n.Scores.ContainsKey(sigla) && n.Scores[sigla] > 0)
-                    // REGRA DE OURO: A notícia só aparece na categoria onde teve sua nota MÁXIMA
-                    .Where(n => n.Scores.OrderByDescending(x => x.Value).FirstOrDefault().Key == sigla)
-                    .OrderByDescending(n => n.Scores[sigla])
-                    .FirstOrDefault();
+                // 2. Selecionamos as notícias que tiraram a nota mínima para esta sigla
+                // E que ainda NÃO FORAM usadas em categorias anteriores
+                var eligibleNews = _allNewsScores
+                    .Where(n => n.Scores.ContainsKey(sigla) && n.Scores[sigla] >= minimumScore)
+                    .Where(n => !usedNewsUrls.Contains(n.Url))
+                    .ToList();
 
-                // 3. Se encontrou um vencedor, adiciona à Grid traduzindo o nome
-                if (winner != null)
+                if (eligibleNews.Any())
                 {
-                    // Busca o nome amigável (Ex: "CS" -> "Ciência Controversa")
-                    string nomeCompleto = TopicCatalog.CodeToName.ContainsKey(sigla)
-                                          ? TopicCatalog.CodeToName[sigla]
-                                          : sigla;
+                    // Pega a melhor notícia para este tópico específico
+                    var winner = eligibleNews
+                        .OrderByDescending(n => n.Scores[sigla])
+                        .FirstOrDefault();
 
-                    topicResults.Add(new TopicResult
+                    if (winner != null)
                     {
-                        Topic = nomeCompleto,
-                        Url = winner.Url,
-                        Score = winner.Scores[sigla],
-                        Summary = winner.Summary,
-                        IsClicked = false
-                    });
+                        // Registra que a notícia ganhou uma vaga (não poderá entrar nas próximas categorias)
+                        usedNewsUrls.Add(winner.Url);
+
+                        // Busca o nome amigável (Ex: "CS" -> "Ciência Controversa")
+                        string nomeCompleto = TopicCatalog.CodeToName.ContainsKey(sigla)
+                                              ? TopicCatalog.CodeToName[sigla]
+                                              : sigla;
+
+                        topicResults.Add(new TopicResult
+                        {
+                            Topic = nomeCompleto,
+                            Url = winner.Url,
+                            Score = winner.Scores[sigla],
+                            Summary = winner.Summary,
+                            IsClicked = false
+                        });
+                    }
                 }
             }
 
@@ -1434,7 +1449,8 @@ namespace NewsImpactRanker.WinForms.Forms
             // Estima a quantidade de tokens: (caracteres / 4) + margem do prompt
             // int estimatedTokens = (textToProcess.Length / 4) + 200;
             // int estimatedTokens = (textToProcess.Length / 4) + 1000;
-            int estimatedTokens = (textToProcess.Length / 4) + 2000;
+            // int estimatedTokens = (textToProcess.Length / 4) + 2000;
+            int estimatedTokens = (textToProcess.Length / 3) + 3000;
 
             int waitTimeMs = 0;
 

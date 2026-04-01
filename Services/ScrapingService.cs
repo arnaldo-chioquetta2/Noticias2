@@ -15,8 +15,10 @@ namespace NewsImpactRanker.WinForms.Services
     public class ScrapingService
     {
         private readonly HttpClient _httpClient;
+
         private readonly List<string> _userAgents = new List<string>
         {
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
@@ -25,16 +27,46 @@ namespace NewsImpactRanker.WinForms.Services
 
         public ScrapingService()
         {
+            // 🛡️ Configuração de Segurança de Protocolo (Resolve muitos erros 400/403)
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+
             var handler = new HttpClientHandler
             {
                 CookieContainer = new CookieContainer(),
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                UseCookies = true,
+                AllowAutoRedirect = true,
+                // Ignora erros de certificado SSL (comum em sites de notícias antigos)
+                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
             };
+
             _httpClient = new HttpClient(handler)
             {
-                Timeout = TimeSpan.FromSeconds(20)
+                Timeout = TimeSpan.FromSeconds(25)
             };
+
+            // 🕵️‍♂️ Configuração Inicial dos Headers de Disfarce
+            ResetHeaders();
         }
+
+        private void ResetHeaders()
+        {
+            _httpClient.DefaultRequestHeaders.Clear();
+
+            // 1. User-Agent inicial (será rotacionado no ScrapeAsync)
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", _userAgents[0]);
+
+            // 2. Aceita idiomas (Essencial para sites como Phys.org)
+            _httpClient.DefaultRequestHeaders.Add("Accept-Language", "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7");
+
+            // 3. Simula um pedido de página HTML real
+            _httpClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+
+            // 4. Cabeçalhos de segurança que navegadores modernos enviam
+            _httpClient.DefaultRequestHeaders.Add("Upgrade-Insecure-Requests", "1");
+            _httpClient.DefaultRequestHeaders.Add("Cache-Control", "max-age=0");
+        }
+
 
         public async Task<NewsItem> ScrapeAsync(string url)
         {
@@ -123,49 +155,54 @@ namespace NewsImpactRanker.WinForms.Services
         /// </summary>
         private async Task<string> GetHtmlWithRetry(string url)
         {
-            int maxAttempts = 3;
+            int maxRetries = 3;
+            var random = new Random();
 
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            for (int i = 0; i < maxRetries; i++)
             {
                 try
                 {
-                    // Define um timeout específico para a requisição se necessário
+                    // 🔄 ROTAÇÃO: Escolhe um User-Agent aleatório da lista antes de cada requisição
+                    string currentAgent = _userAgents[random.Next(_userAgents.Count)];
+                    _httpClient.DefaultRequestHeaders.Remove("User-Agent");
+                    _httpClient.DefaultRequestHeaders.Add("User-Agent", currentAgent);
+
+                    // ⏱️ POLITE SCRAPER: Atraso aleatório entre 3 e 7 segundos para evitar o Erro 429
+                    int delayMs = random.Next(3000, 7001);
+                    LogService.Info($"⏳ Aguardando {delayMs / 1000.0}s para evitar bloqueio...");
+                    await Task.Delay(delayMs);
+
+                    // Faz a requisição de fato
                     var response = await _httpClient.GetAsync(url);
 
+                    // Trata erros HTTP (como 404, 403, 429)
                     if (!response.IsSuccessStatusCode)
                     {
-                        // Se for 404 ou 403, geralmente não adianta tentar novamente no loop
                         LogService.Warn($"HTTP {(int)response.StatusCode} para {url}");
-                        LogService.AddFalha(url, $"Bloqueado pelo site (Erro HTTP {(int)response.StatusCode}). O site pode estar protegido contra robôs.");
-                        return null;
+
+                        // Se for 404 (Not Found) ou 403 (Forbidden pesado), não adianta tentar de novo
+                        if (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.Forbidden)
+                            return null;
+
+                        // Se for 429 ou 500, a gente joga um erro pra forçar o Retry no bloco Catch
+                        throw new HttpRequestException($"Erro {response.StatusCode}");
                     }
 
-                    // --- CORREÇÃO PARA ERRO DE CHARSET ---
-                    // Em vez de ReadAsStringAsync (que falha se o cabeçalho do site estiver mal formatado),
-                    // lemos os dados puros (bytes) e forçamos a conversão para UTF-8.
-                    byte[] contentBytes = await response.Content.ReadAsByteArrayAsync();
-                    return Encoding.UTF8.GetString(contentBytes);
-                    // -------------------------------------
+                    return await response.Content.ReadAsStringAsync();
                 }
                 catch (Exception ex)
                 {
-                    LogService.Warn($"Tentativa {attempt}/{maxAttempts} falhou para {url}: {ex.Message}");
-
-                    if (attempt == maxAttempts)
+                    if (i == maxRetries - 1)
                     {
-                        LogService.Error($"Falha definitiva após {maxAttempts} tentativas para {url}");
+                        LogService.Error($"Falha definitiva após {maxRetries} tentativas para {url}", ex);
                         return null;
                     }
 
-                    // Espera exponencial: 2s, 4s...
-                    int delay = (int)Math.Pow(2, attempt) * 1000;
-
-                    // Log visual para você saber que o sistema está aguardando o retry
-                    LogService.Info($"Aguardando {delay}ms para nova tentativa...");
-                    await Task.Delay(delay);
+                    // Espera ainda mais tempo no Retry caso o site esteja engasgando
+                    LogService.Warn($"Tentativa {i + 1}/{maxRetries} falhou para {url}: {ex.Message}. Aguardando {(i + 1) * 2}s...");
+                    await Task.Delay((i + 1) * 2000);
                 }
             }
-
             return null;
         }
 
