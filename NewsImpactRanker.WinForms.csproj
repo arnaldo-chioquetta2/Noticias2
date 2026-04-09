@@ -79,6 +79,7 @@
     <Compile Include="Models\NewsItem.cs" />
     <Compile Include="Models\AppConfig.cs" />
     <Compile Include="Models\GeminiResponse.cs" />
+    <Compile Include="Models\NewsScoreResult.cs" />
     <Compile Include="Models\NewsScoresItem.cs" />
     <Compile Include="Models\SummaryCacheItem.cs" />
     <Compile Include="Models\TokenUsageEntry.cs" />

@@ -124,16 +124,16 @@ namespace NewsImpactRanker.WinForms.Services
             if (parsed == null)
                 return ServiceResult<TopicScoresResponse>.Fail("Falha ao processar resposta da IA.");
 
-            if (parsed.scores == null)
-                parsed.scores = new Dictionary<string, int>();
+            if (parsed.Scores == null)
+                parsed.Scores = new Dictionary<string, int>();
 
             // Garante que todos os 26 tópicos existam no dicionário
-            EnsureAllTopics(parsed.scores);
+            EnsureAllTopics(parsed.Scores);
 
             // Normaliza os scores para o intervalo 0-100
-            foreach (var key in parsed.scores.Keys.ToList())
+            foreach (var key in parsed.Scores.Keys.ToList())
             {
-                parsed.scores[key] = Math.Max(0, Math.Min(100, parsed.scores[key]));
+                parsed.Scores[key] = Math.Max(0, Math.Min(100, parsed.Scores[key]));
             }
 
             return ServiceResult<TopicScoresResponse>.Ok(parsed);

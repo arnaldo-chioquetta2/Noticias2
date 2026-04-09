@@ -242,7 +242,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 LogService.Info($"Processamento concluído. Sucessos: {_allNewsScores.Count}");
 
                 // Seleciona as melhores notícias por tópico (Ranking Final)
-                var topicResults = SelectBestNewsPerTopic();
+                var topicResults = SelectBestNewsPerTopic(9);
 
                 // ---> INTEGRAÇÃO COM LAST RESULTS (JSON) <---
                 // 1. Atualiza a variável de memória global para o controle de cliques
@@ -285,8 +285,6 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
-        //////
-
         private async Task ProcessUrlsAsync(List<string> urls)
         {
             _executionTimer.Restart();
@@ -295,20 +293,20 @@ namespace NewsImpactRanker.WinForms.Forms
 
             foreach (var url in urls)
             {
+                // Verifica cancelamento
                 if (_cts != null && _cts.IsCancellationRequested) break;
 
                 Stopwatch itemTimer = Stopwatch.StartNew();
 
                 try
                 {
-                    // Chama o trabalhador secundário para processar 1 URL por vez
+                    // O segredo do Fallback está aqui dentro
                     await ProcessSingleUrlAsync(url);
                 }
                 catch (Exception ex)
                 {
-                    LogService.Error($"Erro crítico em {url}: {ex.Message}");
+                    LogService.Error($"Erro crítico ao processar {url}: {ex.Message}");
                     _lastIaError = ex.Message;
-                    _iaErrorCount++;
                 }
                 finally
                 {
@@ -323,7 +321,8 @@ namespace NewsImpactRanker.WinForms.Forms
                     UpdateStatusLabel();
                 }
 
-                await Task.Delay(2000); // Respiro da interface
+                // Delay entre URLs para o Polite Scraping (ajustado para ser seguro)
+                await Task.Delay(1000);
             }
 
             _executionTimer.Stop();
@@ -332,36 +331,105 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private async Task ProcessSingleUrlAsync(string url)
         {
-            // 👉 ETAPA A: CACHE DE URL
-#if DEBUG
-            bool isCached = false;
-#else
-            bool isCached = _evaluatedCache != null && _evaluatedCache.ContainsKey(url);
-#endif
+            // 1. Scraping (O disfarce e o delay aleatório já estão no ScrapingService)
+            var newsItem = await _scrapingService.ScrapeAsync(url);
 
-            if (isCached)
+            if (newsItem == null || newsItem.Status != "Sucesso" || string.IsNullOrWhiteSpace(newsItem.RawText))
             {
-                UpdateInfoLabel(GetFormattedStatus($"Recuperando da Memória: {url}"));
-                var cachedItem = _evaluatedCache[url];
-                HandleClassificationSuccess(url, cachedItem.Title, cachedItem.Scores, cachedItem.Summary, true);
-                LogService.Info($"[CACHE HIT] URL já conhecida: {url}");
-                _cacheHitCount++;
-                return; // Termina o processamento desta URL aqui
-            }
-
-            // 👉 ETAPA B: SCRAPING
-            UpdateInfoLabel(GetFormattedStatus($"Scraping: {url}"));
-            var scrapedNews = await _scrapingService.ScrapeAsync(url);
-
-            if (scrapedNews == null || scrapedNews.Status != "Sucesso")
-            {
-                if (scrapedNews?.Status == "Bloqueado" || scrapedNews?.Status == "Sem Conteúdo")
-                    _scrapErrorCount++;
+                LogService.Warn($"Scraping falhou ou retornou vazio para: {url}");
+                _scrapErrorCount++;
                 return;
             }
 
-            // Se o scraping funcionou, envia o Texto e o Título para a IA (Método 3)
-            await ExecuteAiAndFilterAsync(url, scrapedNews.RawText, scrapedNews.Title);
+            var config = StorageManager.LoadConfig();
+            bool sucessoIA = false;
+            TopicScoresResponse finalScores = null;
+
+            // --- LÓGICA DE REVEZAMENTO (FALLBACK) ---
+
+            // Tentativa 1: Provedor Principal definido nas configurações
+            var primaryProvider = config.SelectedProvider;
+            var result = await CallAiProviderAsync(primaryProvider, newsItem.RawText, url);
+
+            if (result.Success && result.Data != null)
+            {
+                finalScores = result.Data;
+                sucessoIA = true;
+            }
+            else
+            {
+                // Se o principal falhou (ex: erro de IP no Gemini), tentamos o Fallback (O reserva)
+                var fallbackProvider = (primaryProvider == AiProvider.Gemini) ? AiProvider.Groq : AiProvider.Gemini;
+
+                LogService.Warn($"⚠️ {primaryProvider} falhou para {url}. Acionando reserva {fallbackProvider}...");
+
+                var fallbackResult = await CallAiProviderAsync(fallbackProvider, newsItem.RawText, url);
+
+                if (fallbackResult.Success && fallbackResult.Data != null)
+                {
+                    finalScores = fallbackResult.Data;
+                    sucessoIA = true;
+                    LogService.Info($"✅ Fallback bem-sucedido! {fallbackProvider} processou {url}.");
+                }
+            }
+
+            // --- FINALIZAÇÃO ---
+
+            if (sucessoIA && finalScores != null)
+            {
+                // Aqui usamos 'NewsScoresItem' para ser compatível com a lista global '_allNewsScores'
+                // E usamos 'Summary' e 'Scores' com iniciais maiúsculas conforme a classe TopicScoresResponse
+                var resultScore = new NewsScoresItem
+                {
+                    Url = url,
+                    Title = newsItem.Title,
+                    Summary = finalScores.Summary,
+                    Scores = finalScores.Scores
+                };
+
+                lock (_allNewsScores)
+                {
+                    _allNewsScores.Add(resultScore);
+                }
+                _successCount++;
+            }
+            else
+            {
+                LogService.Error($"❌ Falha definitiva: Nenhuma IA conseguiu processar {url}");
+                _iaErrorCount++;
+            }
+        }
+
+
+        private async Task<ServiceResult<TopicScoresResponse>> CallAiProviderAsync(AiProvider provider, string text, string url)
+        {
+            try
+            {
+                if (provider == AiProvider.Gemini)
+                {
+                    // 1. Recebe a Tupla do Gemini
+                    var result = await _geminiService.ClassifyNewsAsync(text);
+
+                    // 2. Converte manualmente para ServiceResult
+                    if (result.Success)
+                    {
+                        return ServiceResult<TopicScoresResponse>.Ok((TopicScoresResponse)result.Data);
+                    }
+                    else
+                    {
+                        return ServiceResult<TopicScoresResponse>.Fail(result.ErrorMessage);
+                    }
+                }
+                else
+                {
+                    // O Groq já retorna ServiceResult direto, então aqui não dá erro
+                    return await _groqService.ClassifyNewsAsync(text);
+                }
+            }
+            catch (Exception ex)
+            {
+                return ServiceResult<TopicScoresResponse>.Fail($"Exceção na IA ({provider}): {ex.Message}");
+            }
         }
 
         private async Task ExecuteAiAndFilterAsync(string url, string rawText, string title)
