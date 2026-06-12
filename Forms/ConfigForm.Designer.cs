@@ -21,6 +21,16 @@ namespace NewsImpactRanker.WinForms.Forms
             this.txtApiKey = new System.Windows.Forms.TextBox();
             this.labelGemini = new System.Windows.Forms.Label();
             this.txtGeminiApiKey = new System.Windows.Forms.TextBox();
+            this.labelDeepSeek = new System.Windows.Forms.Label();
+            this.txtDeepSeekApiKey = new System.Windows.Forms.TextBox();
+            this.labelDeepSeekModel = new System.Windows.Forms.Label();
+            this.txtDeepSeekModel = new System.Windows.Forms.TextBox();
+            this.labelDeepSeekBaseUrl = new System.Windows.Forms.Label();
+            this.txtDeepSeekBaseUrl = new System.Windows.Forms.TextBox();
+            this.labelMistralApiKey = new System.Windows.Forms.Label();
+            this.txtMistralApiKey = new System.Windows.Forms.TextBox();
+            this.labelMistralModel = new System.Windows.Forms.Label();
+            this.txtMistralModel = new System.Windows.Forms.TextBox();
             this.label2 = new System.Windows.Forms.Label();
             this.txtModel = new System.Windows.Forms.TextBox();
             this.label3 = new System.Windows.Forms.Label();
@@ -87,18 +97,98 @@ namespace NewsImpactRanker.WinForms.Forms
             this.txtGeminiApiKey.Size = new System.Drawing.Size(381, 20);
             this.txtGeminiApiKey.TabIndex = 3;
             // 
+            // labelDeepSeek
+            // 
+            this.labelDeepSeek.AutoSize = true;
+            this.labelDeepSeek.Location = new System.Drawing.Point(12, 145);
+            this.labelDeepSeek.Name = "labelDeepSeek";
+            this.labelDeepSeek.Size = new System.Drawing.Size(121, 13);
+            this.labelDeepSeek.TabIndex = 18;
+            this.labelDeepSeek.Text = "Chave da API DeepSeek:";
+            // 
+            // txtDeepSeekApiKey
+            // 
+            this.txtDeepSeekApiKey.Location = new System.Drawing.Point(12, 161);
+            this.txtDeepSeekApiKey.Name = "txtDeepSeekApiKey";
+            this.txtDeepSeekApiKey.Size = new System.Drawing.Size(381, 20);
+            this.txtDeepSeekApiKey.TabIndex = 19;
+            // 
+            // labelDeepSeekModel
+            // 
+            this.labelDeepSeekModel.AutoSize = true;
+            this.labelDeepSeekModel.Location = new System.Drawing.Point(12, 190);
+            this.labelDeepSeekModel.Name = "labelDeepSeekModel";
+            this.labelDeepSeekModel.Size = new System.Drawing.Size(99, 13);
+            this.labelDeepSeekModel.TabIndex = 20;
+            this.labelDeepSeekModel.Text = "Modelo DeepSeek:";
+            // 
+            // txtDeepSeekModel
+            // 
+            this.txtDeepSeekModel.Location = new System.Drawing.Point(12, 206);
+            this.txtDeepSeekModel.Name = "txtDeepSeekModel";
+            this.txtDeepSeekModel.Size = new System.Drawing.Size(381, 20);
+            this.txtDeepSeekModel.TabIndex = 21;
+            // 
+            // labelDeepSeekBaseUrl
+            // 
+            this.labelDeepSeekBaseUrl.AutoSize = true;
+            this.labelDeepSeekBaseUrl.Location = new System.Drawing.Point(12, 235);
+            this.labelDeepSeekBaseUrl.Name = "labelDeepSeekBaseUrl";
+            this.labelDeepSeekBaseUrl.Size = new System.Drawing.Size(102, 13);
+            this.labelDeepSeekBaseUrl.TabIndex = 22;
+            this.labelDeepSeekBaseUrl.Text = "Base URL DeepSeek:";
+            // 
+            // txtDeepSeekBaseUrl
+            // 
+            this.txtDeepSeekBaseUrl.Location = new System.Drawing.Point(12, 251);
+            this.txtDeepSeekBaseUrl.Name = "txtDeepSeekBaseUrl";
+            this.txtDeepSeekBaseUrl.Size = new System.Drawing.Size(381, 20);
+            this.txtDeepSeekBaseUrl.TabIndex = 23;
+            // 
+            // labelMistralApiKey
+            // 
+            this.labelMistralApiKey.AutoSize = true;
+            this.labelMistralApiKey.Location = new System.Drawing.Point(12, 280);
+            this.labelMistralApiKey.Name = "labelMistralApiKey";
+            this.labelMistralApiKey.Size = new System.Drawing.Size(107, 13);
+            this.labelMistralApiKey.TabIndex = 24;
+            this.labelMistralApiKey.Text = "Chave da API Mistral:";
+            // 
+            // txtMistralApiKey
+            // 
+            this.txtMistralApiKey.Location = new System.Drawing.Point(12, 296);
+            this.txtMistralApiKey.Name = "txtMistralApiKey";
+            this.txtMistralApiKey.Size = new System.Drawing.Size(381, 20);
+            this.txtMistralApiKey.TabIndex = 25;
+            // 
+            // labelMistralModel
+            // 
+            this.labelMistralModel.AutoSize = true;
+            this.labelMistralModel.Location = new System.Drawing.Point(12, 325);
+            this.labelMistralModel.Name = "labelMistralModel";
+            this.labelMistralModel.Size = new System.Drawing.Size(79, 13);
+            this.labelMistralModel.TabIndex = 26;
+            this.labelMistralModel.Text = "Modelo Mistral:";
+            // 
+            // txtMistralModel
+            // 
+            this.txtMistralModel.Location = new System.Drawing.Point(12, 341);
+            this.txtMistralModel.Name = "txtMistralModel";
+            this.txtMistralModel.Size = new System.Drawing.Size(381, 20);
+            this.txtMistralModel.TabIndex = 27;
+            // 
             // label2
             // 
             this.label2.AutoSize = true;
-            this.label2.Location = new System.Drawing.Point(12, 145);
+            this.label2.Location = new System.Drawing.Point(12, 370);
             this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(45, 13);
+            this.label2.Size = new System.Drawing.Size(76, 13);
             this.label2.TabIndex = 8;
-            this.label2.Text = "Modelo:";
+            this.label2.Text = "Modelo Groq:";
             // 
             // txtModel
             // 
-            this.txtModel.Location = new System.Drawing.Point(12, 161);
+            this.txtModel.Location = new System.Drawing.Point(12, 386);
             this.txtModel.Name = "txtModel";
             this.txtModel.Size = new System.Drawing.Size(381, 20);
             this.txtModel.TabIndex = 7;
@@ -106,22 +196,22 @@ namespace NewsImpactRanker.WinForms.Forms
             // label3
             // 
             this.label3.AutoSize = true;
-            this.label3.Location = new System.Drawing.Point(12, 190);
+            this.label3.Location = new System.Drawing.Point(12, 415);
             this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(102, 13);
+            this.label3.Size = new System.Drawing.Size(95, 13);
             this.label3.TabIndex = 13;
-            this.label3.Text = "Arquivo de notícias:";
+            this.label3.Text = "Arquivo de noticias:";
             // 
             // txtNewsFile
             // 
-            this.txtNewsFile.Location = new System.Drawing.Point(12, 206);
+            this.txtNewsFile.Location = new System.Drawing.Point(12, 431);
             this.txtNewsFile.Name = "txtNewsFile";
             this.txtNewsFile.Size = new System.Drawing.Size(300, 20);
             this.txtNewsFile.TabIndex = 14;
             // 
             // btnBrowse
             // 
-            this.btnBrowse.Location = new System.Drawing.Point(318, 204);
+            this.btnBrowse.Location = new System.Drawing.Point(318, 429);
             this.btnBrowse.Name = "btnBrowse";
             this.btnBrowse.Size = new System.Drawing.Size(75, 23);
             this.btnBrowse.TabIndex = 15;
@@ -131,7 +221,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // label4
             // 
             this.label4.AutoSize = true;
-            this.label4.Location = new System.Drawing.Point(12, 235);
+            this.label4.Location = new System.Drawing.Point(12, 460);
             this.label4.Name = "label4";
             this.label4.Size = new System.Drawing.Size(97, 13);
             this.label4.TabIndex = 4;
@@ -139,14 +229,14 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // txtPromptFile
             // 
-            this.txtPromptFile.Location = new System.Drawing.Point(12, 251);
+            this.txtPromptFile.Location = new System.Drawing.Point(12, 476);
             this.txtPromptFile.Name = "txtPromptFile";
             this.txtPromptFile.Size = new System.Drawing.Size(300, 20);
             this.txtPromptFile.TabIndex = 5;
             // 
             // btnBrowsePrompt
             // 
-            this.btnBrowsePrompt.Location = new System.Drawing.Point(318, 249);
+            this.btnBrowsePrompt.Location = new System.Drawing.Point(318, 474);
             this.btnBrowsePrompt.Name = "btnBrowsePrompt";
             this.btnBrowsePrompt.Size = new System.Drawing.Size(75, 23);
             this.btnBrowsePrompt.TabIndex = 6;
@@ -155,7 +245,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // btnSave
             // 
-            this.btnSave.Location = new System.Drawing.Point(12, 335);
+            this.btnSave.Location = new System.Drawing.Point(12, 560);
             this.btnSave.Name = "btnSave";
             this.btnSave.Size = new System.Drawing.Size(75, 23);
             this.btnSave.TabIndex = 10;
@@ -165,7 +255,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // btnCancel
             // 
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(318, 335);
+            this.btnCancel.Location = new System.Drawing.Point(318, 560);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(75, 23);
             this.btnCancel.TabIndex = 9;
@@ -174,7 +264,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 
             // nudSummaryWordCount
             // 
-            this.nudSummaryWordCount.Location = new System.Drawing.Point(351, 293);
+            this.nudSummaryWordCount.Location = new System.Drawing.Point(351, 518);
             this.nudSummaryWordCount.Maximum = new decimal(new int[] {
             30,
             0,
@@ -197,7 +287,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // label5
             // 
             this.label5.AutoSize = true;
-            this.label5.Location = new System.Drawing.Point(245, 295);
+            this.label5.Location = new System.Drawing.Point(245, 520);
             this.label5.Name = "label5";
             this.label5.Size = new System.Drawing.Size(100, 13);
             this.label5.TabIndex = 17;
@@ -209,7 +299,17 @@ namespace NewsImpactRanker.WinForms.Forms
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(410, 379);
+            this.ClientSize = new System.Drawing.Size(410, 606);
+            this.Controls.Add(this.labelMistralApiKey);
+            this.Controls.Add(this.txtMistralApiKey);
+            this.Controls.Add(this.labelMistralModel);
+            this.Controls.Add(this.txtMistralModel);
+            this.Controls.Add(this.labelDeepSeek);
+            this.Controls.Add(this.txtDeepSeekApiKey);
+            this.Controls.Add(this.labelDeepSeekModel);
+            this.Controls.Add(this.txtDeepSeekModel);
+            this.Controls.Add(this.labelDeepSeekBaseUrl);
+            this.Controls.Add(this.txtDeepSeekBaseUrl);
             this.Controls.Add(this.label5);
             this.Controls.Add(this.nudSummaryWordCount);
             this.Controls.Add(this.cmbProvider);
@@ -233,7 +333,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.MinimizeBox = false;
             this.Name = "ConfigForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "Configurações da IA";
+            this.Text = "Configuracoes da IA";
             this.Load += new System.EventHandler(this.ConfigForm_Load);
             ((System.ComponentModel.ISupportInitialize)(this.nudSummaryWordCount)).EndInit();
             this.ResumeLayout(false);
@@ -247,6 +347,16 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.TextBox txtApiKey;
         private System.Windows.Forms.Label labelGemini;
         private System.Windows.Forms.TextBox txtGeminiApiKey;
+        private System.Windows.Forms.Label labelDeepSeek;
+        private System.Windows.Forms.TextBox txtDeepSeekApiKey;
+        private System.Windows.Forms.Label labelDeepSeekModel;
+        private System.Windows.Forms.TextBox txtDeepSeekModel;
+        private System.Windows.Forms.Label labelDeepSeekBaseUrl;
+        private System.Windows.Forms.TextBox txtDeepSeekBaseUrl;
+        private System.Windows.Forms.Label labelMistralApiKey;
+        private System.Windows.Forms.TextBox txtMistralApiKey;
+        private System.Windows.Forms.Label labelMistralModel;
+        private System.Windows.Forms.TextBox txtMistralModel;
         private System.Windows.Forms.Button btnSave;
         private System.Windows.Forms.Button btnCancel;
         private System.Windows.Forms.Label label2;

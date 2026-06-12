@@ -88,6 +88,12 @@
     <Compile Include="Models\TopicScoresResponse.cs" />
     <Compile Include="Services\GeminiService.cs" />
     <Compile Include="Services\GroqService.cs" />
+    <Compile Include="Services\IAiProvider.cs" />
+    <Compile Include="Services\AiResponseParser.cs" />
+    <Compile Include="Services\DeepSeekService.cs" />
+    <Compile Include="Services\CostManager.cs" />
+    <Compile Include="Services\MistralService.cs" />
+    <Compile Include="Services\AiRouterService.cs" />
     <Compile Include="Services\ScrapingService.cs" />
     <Compile Include="Services\CacheService.cs" />
     <Compile Include="Services\LogService.cs" />

@@ -53,20 +53,24 @@ namespace NewsImpactRanker.WinForms.Services
         {
             _httpClient.DefaultRequestHeaders.Clear();
 
-            // 1. User-Agent inicial (será rotacionado no ScrapeAsync)
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", _userAgents[0]);
+            // 1. O "Crachá" de Googlebot
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)");
 
-            // 2. Aceita idiomas (Essencial para sites como Phys.org)
-            _httpClient.DefaultRequestHeaders.Add("Accept-Language", "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7");
+            // 2. O "Rastro": Dizemos que estamos vindo de uma pesquisa do Google
+            // Isso ajuda muito a evitar bloqueios em portais de notícias
+            _httpClient.DefaultRequestHeaders.Add("Referer", "https://www.google.com/");
 
-            // 3. Simula um pedido de página HTML real
-            _httpClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+            // 3. Idiomas e Aceitação de Conteúdo
+            _httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9,pt-BR;q=0.8,pt;q=0.7");
+            _httpClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
 
-            // 4. Cabeçalhos de segurança que navegadores modernos enviam
+            // 4. Cabeçalhos de "Simulação de Humano" (Sec-Fetch)
+            // Mesmo como robô, esses headers ajudam a passar por firewalls modernos
+            _httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "document");
+            _httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "navigate");
+            _httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Site", "cross-site");
             _httpClient.DefaultRequestHeaders.Add("Upgrade-Insecure-Requests", "1");
-            _httpClient.DefaultRequestHeaders.Add("Cache-Control", "max-age=0");
         }
-
 
         public async Task<NewsItem> ScrapeAsync(string url)
         {
@@ -149,58 +153,69 @@ namespace NewsImpactRanker.WinForms.Services
             };
         }
 
-        /// <summary>
-        /// METHOD v4: GetHtmlWithRetry
-        /// Versão adaptada para ignorar erros de ContentType/Charset inválido (ex: Nature.com)
-        /// </summary>
         private async Task<string> GetHtmlWithRetry(string url)
         {
             int maxRetries = 3;
             var random = new Random();
+            bool tentouCache = false;
 
             for (int i = 0; i < maxRetries; i++)
             {
                 try
                 {
-                    // 🔄 ROTAÇÃO: Escolhe um User-Agent aleatório da lista antes de cada requisição
-                    string currentAgent = _userAgents[random.Next(_userAgents.Count)];
-                    _httpClient.DefaultRequestHeaders.Remove("User-Agent");
-                    _httpClient.DefaultRequestHeaders.Add("User-Agent", currentAgent);
+                    // 🔄 AJUSTE NO DISFARCE: 
+                    // Se o objetivo é ser o Googlebot, não podemos rotacionar para Chrome/Firefox.
+                    // Vamos manter o User-Agent fixo como Googlebot definido no ResetHeaders.
+                    // Se quiser rotacionar, a lista '_userAgents' deve conter apenas variações de Googlebot.
 
-                    // ⏱️ POLITE SCRAPER: Atraso aleatório entre 3 e 7 segundos para evitar o Erro 429
+                    // Opcional: Descomente se quiser voltar a rotacionar navegadores comuns:
+                    // string currentAgent = _userAgents[random.Next(_userAgents.Count)];
+                    // _httpClient.DefaultRequestHeaders.Remove("User-Agent");
+                    // _httpClient.DefaultRequestHeaders.Add("User-Agent", currentAgent);
+
+                    // ⏱️ POLITE SCRAPER
                     int delayMs = random.Next(3000, 7001);
                     LogService.Info($"⏳ Aguardando {delayMs / 1000.0}s para evitar bloqueio...");
                     await Task.Delay(delayMs);
 
-                    // Faz a requisição de fato
                     var response = await _httpClient.GetAsync(url);
 
-                    // Trata erros HTTP (como 404, 403, 429)
                     if (!response.IsSuccessStatusCode)
                     {
                         LogService.Warn($"HTTP {(int)response.StatusCode} para {url}");
 
-                        // Se for 404 (Not Found) ou 403 (Forbidden pesado), não adianta tentar de novo
-                        if (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.Forbidden)
+                        // 🚨 O PULO DO GATO: Se der 403, tentamos o Cache do Google uma única vez
+                        if (response.StatusCode == HttpStatusCode.Forbidden && !tentouCache)
+                        {
+                            LogService.Warn($"⛔ Bloqueio 403 detectado. Tentando via Google Web Cache...");
+                            url = $"https://webcache.googleusercontent.com/search?q=cache:{url}";
+                            tentouCache = true;
+                            i = -1; // Reseta as tentativas para a nova URL de cache
+                            continue;
+                        }
+
+                        if (response.StatusCode == HttpStatusCode.NotFound)
                             return null;
 
-                        // Se for 429 ou 500, a gente joga um erro pra forçar o Retry no bloco Catch
                         throw new HttpRequestException($"Erro {response.StatusCode}");
                     }
 
-                    return await response.Content.ReadAsStringAsync();
+                    // 🛠️ FIX DE ENCODING: Resolve o erro de "conjunto de caracteres inválido" (ex: Nature.com)
+                    // Em vez de ReadAsStringAsync direto, lemos os bytes e forçamos UTF-8 ou o que o site mandar
+                    byte[] contentBytes = await response.Content.ReadAsByteArrayAsync();
+                    return Encoding.UTF8.GetString(contentBytes);
                 }
                 catch (Exception ex)
                 {
                     if (i == maxRetries - 1)
                     {
-                        LogService.Error($"Falha definitiva após {maxRetries} tentativas para {url}", ex);
+                        LogService.Error($"Falha definitiva após {maxRetries} tentativas para {url}: {ex.Message}");
                         return null;
                     }
 
-                    // Espera ainda mais tempo no Retry caso o site esteja engasgando
-                    LogService.Warn($"Tentativa {i + 1}/{maxRetries} falhou para {url}: {ex.Message}. Aguardando {(i + 1) * 2}s...");
-                    await Task.Delay((i + 1) * 2000);
+                    int waitTime = (i + 1) * 3000;
+                    LogService.Warn($"Tentativa {i + 1}/{maxRetries} falhou. Aguardando {waitTime / 1000}s...");
+                    await Task.Delay(waitTime);
                 }
             }
             return null;

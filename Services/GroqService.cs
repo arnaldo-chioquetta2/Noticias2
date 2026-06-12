@@ -14,10 +14,11 @@ using System.Collections.Generic;
 
 namespace NewsImpactRanker.WinForms.Services
 {
-    public class GroqService
+    public class GroqService : IAiProvider
     {
         private readonly HttpClient _httpClient;
-        private readonly AppConfig _config;
+        private AppConfig _config;
+        public string Name => "GROQ";
 
         public GroqService()
         {
@@ -26,7 +27,9 @@ namespace NewsImpactRanker.WinForms.Services
                 Timeout = TimeSpan.FromSeconds(30)
             };
 
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "NewsImpactRanker/1.0");
+            // Em vez de NewsImpactRanker, usamos um padrão de aplicação servidora
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsImpactRanker/1.1");
+
             _httpClient.DefaultRequestHeaders.Accept.Add(
                 new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -36,14 +39,22 @@ namespace NewsImpactRanker.WinForms.Services
         // METHOD v4: ClassifyNewsAsync (GroqService)
         public async Task<ServiceResult<TopicScoresResponse>> ClassifyNewsAsync(string text)
         {
-            LogService.Info("METHOD v4: ClassifyNewsAsync (Groq)");
+            _config = StorageManager.LoadConfig();
+            if (string.IsNullOrWhiteSpace(_config.PromptFilePath) || !File.Exists(_config.PromptFilePath))
+                return ServiceResult<TopicScoresResponse>.Fail("Arquivo de prompt não encontrado.");
+
+            string systemPrompt = File.ReadAllText(_config.PromptFilePath);
+            return await ClassifyAsync(text, systemPrompt);
+        }
+
+        public async Task<ServiceResult<TopicScoresResponse>> ClassifyAsync(string text, string prompt)
+        {
+            LogService.Info("METHOD v4: ClassifyAsync (Groq)");
+            _config = StorageManager.LoadConfig();
 
             // 1. Validações Iniciais
             if (string.IsNullOrWhiteSpace(_config.AiApiKey))
                 return ServiceResult<TopicScoresResponse>.Fail("API Key da Groq não configurada.");
-
-            if (string.IsNullOrWhiteSpace(_config.PromptFilePath) || !File.Exists(_config.PromptFilePath))
-                return ServiceResult<TopicScoresResponse>.Fail("Arquivo de prompt não encontrado.");
 
             // 2. Preparação do Texto
             text = (text ?? "").Trim();
@@ -55,7 +66,7 @@ namespace NewsImpactRanker.WinForms.Services
             LogService.Info($"🧾 Texto p/ IA - len={text.Length}");
 
             // 3. Montagem do Payload
-            string systemPrompt = File.ReadAllText(_config.PromptFilePath);
+            string systemPrompt = prompt ?? "";
             string url = "https://api.groq.com/openai/v1/chat/completions";
 
             var payload = new
@@ -88,55 +99,7 @@ namespace NewsImpactRanker.WinForms.Services
             if (string.IsNullOrWhiteSpace(content))
                 return ServiceResult<TopicScoresResponse>.Fail("IA retornou conteúdo vazio.");
 
-            // Limpeza de possíveis tags de Markdown que a IA pode inserir
-            content = content.Replace("```json", "").Replace("```", "").Trim();
-
-            TopicScoresResponse parsed = null;
-
-            try
-            {
-                // Tentativa de conversão direta
-                parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(content);
-            }
-            catch (Exception ex)
-            {
-                LogService.Warn($"Falha na desserialização direta: {ex.Message}. Tentando extração manual...");
-
-                // Backup: Extração manual de JSON caso a IA envie texto extra
-                int start = content.IndexOf("{");
-                int end = content.LastIndexOf("}");
-
-                if (start >= 0 && end > start)
-                {
-                    try
-                    {
-                        string jsonOnly = content.Substring(start, end - start + 1);
-                        parsed = JsonConvert.DeserializeObject<TopicScoresResponse>(jsonOnly);
-                    }
-                    catch
-                    {
-                        return ServiceResult<TopicScoresResponse>.Fail($"JSON Corrompido pelo Groq: {ex.Message}. Texto: {content.Substring(0, Math.Min(content.Length, 150))}...");
-                    }
-                }
-            }
-
-            // 6. Finalização e Normalização
-            if (parsed == null)
-                return ServiceResult<TopicScoresResponse>.Fail("Falha ao processar resposta da IA.");
-
-            if (parsed.Scores == null)
-                parsed.Scores = new Dictionary<string, int>();
-
-            // Garante que todos os 26 tópicos existam no dicionário
-            EnsureAllTopics(parsed.Scores);
-
-            // Normaliza os scores para o intervalo 0-100
-            foreach (var key in parsed.Scores.Keys.ToList())
-            {
-                parsed.Scores[key] = Math.Max(0, Math.Min(100, parsed.Scores[key]));
-            }
-
-            return ServiceResult<TopicScoresResponse>.Ok(parsed);
+            return AiResponseParser.ParseAndNormalize(content, Name);
         }
 
         private void EnsureAllTopics(Dictionary<string, int> scores)
@@ -190,6 +153,23 @@ namespace NewsImpactRanker.WinForms.Services
 
                     var result = JObject.Parse(responseBody);
                     string textResult = result["choices"]?[0]?["message"]?["content"]?.ToString();
+
+                    try
+                    {
+                        var usage = result["usage"];
+                        if (usage != null)
+                        {
+                            int promptTokens = usage["prompt_tokens"] != null ? usage["prompt_tokens"].ToObject<int>() : 0;
+                            int completionTokens = usage["completion_tokens"] != null ? usage["completion_tokens"].ToObject<int>() : 0;
+                            CostManager.AddGroqUsage(promptTokens, completionTokens);
+                            LogService.Info($"[GROQ] usage prompt={promptTokens} completion={completionTokens}");
+                            LogService.Info(CostManager.GetSingleLineCostSummary());
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Warn($"[GROQ] Falha ao ler usage: {ex.Message}");
+                    }
 
                     if (string.IsNullOrWhiteSpace(textResult))
                         return ServiceResult<string>.Fail("Groq retornou conteúdo vazio.");

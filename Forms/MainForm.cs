@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Windows.Forms;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Reflection;
 using NewsImpactRanker.WinForms.Utils;
 using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Storage;
@@ -18,6 +19,9 @@ namespace NewsImpactRanker.WinForms.Forms
 {
     public partial class MainForm : Form
     {
+        private const string TopicUrlColumnName = "colTopicUrl";
+        private const string CopyScrapColumnName = "colCopyScrap";
+        private const string MainCaptionBase = "NewsImpactRanker - Classificador de Impacto de Notícias";
 
 #if DEBUG
         private int _registroLimite = 10;
@@ -32,6 +36,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private readonly ScrapingService _scrapingService;
         private readonly GroqService _groqService;
+        private readonly DeepSeekService _deepSeekService;
+        private readonly MistralService _mistralService;
         private CancellationTokenSource _cts;        
         private bool _currentExecutionUsesFile = true;
         private readonly List<string> _failedDomains = new List<string>();
@@ -69,8 +75,9 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private int _groqSuccessCount = 0;
         private int _geminiSuccessCount = 0;
-        // Variável global para rastrear os erros
-        //public Dictionary<string, string> _falhasProcessamento = new Dictionary<string, string>();
+        private int _deepSeekSuccessCount = 0;
+        private int _mistralSuccessCount = 0;
+        private bool _ipBlockWarningShown = false;
 
         private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults_v2.json");
         private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache_v2.json");
@@ -80,11 +87,15 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             InitializeComponent();
             _scrapingService = new ScrapingService();
+            _deepSeekService = new DeepSeekService();
             _groqService = new GroqService();
             _geminiService = new GeminiService();
+            _mistralService = new MistralService();
             dgvResults.SortCompare += DgvResults_SortCompare;
+            ApplyVersionToCaption();
             LoadLastResults();
             LoadEvaluatedCache();
+            _summaryCache = SummaryCacheManager.LoadCache();
 
         }
 
@@ -131,25 +142,35 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             // Carrega configuração atualizada
             var config = StorageManager.LoadConfig();
+            string startupMissingKeyMessage = GetMissingProviderKeyMessage(config);
+            if (startupMissingKeyMessage != null)
+            {
+                MessageBox.Show(startupMissingKeyMessage, "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                btnConfig_Click(null, null);
+                return;
+            }
 
             // Reseta logs e contadores globais
             LogService.ResetLog();
+            CostManager.Reset();
             _successCount = 0;
             _iaErrorCount = 0;
             _scrapErrorCount = 0;
             _cacheHitCount = 0;
+            _deepSeekSuccessCount = 0;
+            _groqSuccessCount = 0;
+            _geminiSuccessCount = 0;
+            _mistralSuccessCount = 0;
             //_falhasProcessamento.Clear();
 
             LogService.Info("=== Processamento iniciado ===");
 
             // 1. Validação Inteligente de API Key conforme o provedor selecionado
-            bool keyConfigurada = config.SelectedProvider == AiProvider.Gemini
-                ? !string.IsNullOrEmpty(config.GeminiApiKey)
-                : !string.IsNullOrEmpty(config.AiApiKey);
+            bool keyConfigurada = true;
 
             if (!keyConfigurada)
             {
-                string provedor = config.SelectedProvider == AiProvider.Gemini ? "Gemini" : "Groq";
+                string provedor = config.SelectedProvider.ToString();
                 MessageBox.Show(
                     $"A chave API do {provedor} não foi configurada.",
                     "Aviso",
@@ -246,10 +267,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 // ---> INTEGRAÇÃO COM LAST RESULTS (JSON) <---
                 // 1. Atualiza a variável de memória global para o controle de cliques
-                _currentTopicResults = topicResults;
-
-                // 2. Salva o status "IsClicked = false" no disco imediatamente
-                SaveLastResults();
+                MergePendingTopicResults(topicResults);
 
                 // 3. Atualiza a grid de resultados por assunto
                 DisplayTopicResults(_currentTopicResults);
@@ -258,6 +276,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 SaveFinalRankingToFile(topicResults);
 
                 LogService.Info($"Total de tópicos preenchidos: {topicResults.Count}");
+                UpdateCostLabel();
             }
             catch (OperationCanceledException)
             {
@@ -282,6 +301,7 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 // Libera a interface novamente
                 ToggleUI(true);
+                UpdateCostLabel();
             }
         }
 
@@ -331,7 +351,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private async Task ProcessSingleUrlAsync(string url)
         {
-            // 1. Scraping (O disfarce e o delay aleatório já estão no ScrapingService)
+            // 1. Scraping
             var newsItem = await _scrapingService.ScrapeAsync(url);
 
             if (newsItem == null || newsItem.Status != "Sucesso" || string.IsNullOrWhiteSpace(newsItem.RawText))
@@ -342,49 +362,27 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             var config = StorageManager.LoadConfig();
-            bool sucessoIA = false;
-            TopicScoresResponse finalScores = null;
 
-            // --- LÓGICA DE REVEZAMENTO (FALLBACK) ---
+            string prompt = LoadPrompt(config);
+            var provider = GetSelectedProviderService(config.SelectedProvider);
+            LogService.Info($"[{provider.Name}] Processando URL: {url}");
+            var aiResult = await provider.ClassifyAsync(newsItem.RawText, prompt);
+            UpdateCostLabel();
 
-            // Tentativa 1: Provedor Principal definido nas configurações
-            var primaryProvider = config.SelectedProvider;
-            var result = await CallAiProviderAsync(primaryProvider, newsItem.RawText, url);
+            // Verifica se o usuário cancelou durante o aviso de IP
+            if (_cts != null && _cts.IsCancellationRequested) return;
 
-            if (result.Success && result.Data != null)
+            // 3. FINALIZAÇÃO
+            if (aiResult.Success && aiResult.Data != null)
             {
-                finalScores = result.Data;
-                sucessoIA = true;
-            }
-            else
-            {
-                // Se o principal falhou (ex: erro de IP no Gemini), tentamos o Fallback (O reserva)
-                var fallbackProvider = (primaryProvider == AiProvider.Gemini) ? AiProvider.Groq : AiProvider.Gemini;
-
-                LogService.Warn($"⚠️ {primaryProvider} falhou para {url}. Acionando reserva {fallbackProvider}...");
-
-                var fallbackResult = await CallAiProviderAsync(fallbackProvider, newsItem.RawText, url);
-
-                if (fallbackResult.Success && fallbackResult.Data != null)
-                {
-                    finalScores = fallbackResult.Data;
-                    sucessoIA = true;
-                    LogService.Info($"✅ Fallback bem-sucedido! {fallbackProvider} processou {url}.");
-                }
-            }
-
-            // --- FINALIZAÇÃO ---
-
-            if (sucessoIA && finalScores != null)
-            {
-                // Aqui usamos 'NewsScoresItem' para ser compatível com a lista global '_allNewsScores'
-                // E usamos 'Summary' e 'Scores' com iniciais maiúsculas conforme a classe TopicScoresResponse
                 var resultScore = new NewsScoresItem
                 {
                     Url = url,
                     Title = newsItem.Title,
-                    Summary = finalScores.Summary,
-                    Scores = finalScores.Scores
+                    Summary = aiResult.Data.Summary,
+                    Scores = aiResult.Data.Scores,
+                    AiProvider = provider.Name,
+                    SourceOrder = _successCount + 1
                 };
 
                 lock (_allNewsScores)
@@ -392,13 +390,161 @@ namespace NewsImpactRanker.WinForms.Forms
                     _allNewsScores.Add(resultScore);
                 }
                 _successCount++;
+                IncrementProviderCounter(provider.Name);
             }
             else
             {
-                LogService.Error($"❌ Falha definitiva: Nenhuma IA conseguiu processar {url}");
+                LogService.Error($"❌ Falha definitiva: Nenhuma IA processou {url}");
                 _iaErrorCount++;
             }
         }
+
+        private string LoadPrompt(AppConfig config)
+        {
+            if (string.IsNullOrWhiteSpace(config.PromptFilePath) || !File.Exists(config.PromptFilePath))
+            {
+                throw new FileNotFoundException("Arquivo de prompt não encontrado.", config.PromptFilePath);
+            }
+
+            return File.ReadAllText(config.PromptFilePath);
+        }
+
+        private void IncrementProviderCounter(string providerName)
+        {
+            switch ((providerName ?? "").ToUpperInvariant())
+            {
+                case "DEEPSEEK":
+                    _deepSeekSuccessCount++;
+                    break;
+                case "GROQ":
+                    _groqSuccessCount++;
+                    break;
+                case "GEMINI":
+                    _geminiSuccessCount++;
+                    break;
+                case "MISTRAL":
+                    _mistralSuccessCount++;
+                    break;
+            }
+        }
+
+        private IAiProvider GetSelectedProviderService(AiProvider provider)
+        {
+            switch (provider)
+            {
+                case AiProvider.DeepSeek:
+                    return _deepSeekService;
+                case AiProvider.Groq:
+                    return _groqService;
+                case AiProvider.Gemini:
+                    return _geminiService;
+                case AiProvider.Mistral:
+                    return _mistralService;
+                default:
+                    throw new InvalidOperationException("Provedor de IA invalido.");
+            }
+        }
+
+        private string GetMissingProviderKeyMessage(AppConfig config)
+        {
+            switch (config.SelectedProvider)
+            {
+                case AiProvider.DeepSeek:
+                    return string.IsNullOrWhiteSpace(config.DeepSeekApiKey) ? "A chave API do DeepSeek nao foi configurada." : null;
+                case AiProvider.Groq:
+                    return string.IsNullOrWhiteSpace(config.AiApiKey) ? "A chave API da Groq nao foi configurada." : null;
+                case AiProvider.Gemini:
+                    return string.IsNullOrWhiteSpace(config.GeminiApiKey) ? "A chave API do Gemini nao foi configurada." : null;
+                case AiProvider.Mistral:
+                    return string.IsNullOrWhiteSpace(config.MistralApiKey) ? "A chave API da Mistral nao foi configurada." : null;
+                default:
+                    return "Provedor de IA invalido.";
+            }
+        }
+
+        private async Task<(bool Success, TopicScoresResponse Scores, AiProvider WinningProvider)> ProcessWithAiFallbackAsync(string rawText, string url, AiProvider primaryProvider)
+        {
+            // --- TENTATIVA 1: Provedor Principal ---
+            var result = await CallAiProviderAsync(primaryProvider, rawText, url);
+
+            // Checa bloqueio de IP no Gemini (se ele for o principal)
+            if (!result.Success && primaryProvider == AiProvider.Gemini && IsIpBlockError(result.ErrorMessage))
+            {
+                // Se o usuário decidir encerrar na caixa de diálogo, retornamos falha imediatamente
+                if (!HandleIpBlockWarning()) return (false, null, primaryProvider);
+            }
+
+            // Se o provedor principal teve sucesso, retornamos os dados
+            if (result.Success && result.Data != null)
+            {
+                return (true, result.Data, primaryProvider);
+            }
+
+            // --- TENTATIVA 2: Fallback (Reserva) ---
+            // Se o principal era Gemini, reserva é Groq (e vice-versa)
+            var fallbackProvider = (primaryProvider == AiProvider.Gemini) ? AiProvider.Groq : AiProvider.Gemini;
+
+            LogService.Warn($"⚠️ {primaryProvider} falhou para {url}. Acionando reserva {fallbackProvider}...");
+
+            var fallbackResult = await CallAiProviderAsync(fallbackProvider, rawText, url);
+
+            // Checa bloqueio de IP também no fallback (caso o reserva seja o Gemini)
+            if (!fallbackResult.Success && fallbackProvider == AiProvider.Gemini && IsIpBlockError(fallbackResult.ErrorMessage))
+            {
+                if (!HandleIpBlockWarning()) return (false, null, fallbackProvider);
+            }
+
+            // Verificação de sucesso do reserva
+            if (fallbackResult.Success && fallbackResult.Data != null)
+            {
+                LogService.Info($"✅ Fallback bem-sucedido! {fallbackProvider} processou {url}.");
+                return (true, fallbackResult.Data, fallbackProvider);
+            }
+            else
+            {
+                // 🚨 CRÍTICO: Registra o motivo real da falha da segunda IA no log 🚨
+                // Sem essa linha, não saberíamos se a Groq falhou por API Key, Limite de Uso ou Erro de JSON
+                LogService.Error($"🚨 O Reserva ({fallbackProvider}) também falhou para {url}: {fallbackResult.ErrorMessage}");
+            }
+
+            // Se as duas falharem, retornamos o pacote informando a falha definitiva
+            return (false, null, primaryProvider);
+        }
+
+        private bool IsIpBlockError(string errorMessage)
+        {
+            if (string.IsNullOrWhiteSpace(errorMessage)) return false;
+            return errorMessage.Contains("ExpectationFailed") ||
+                   errorMessage.Contains("automated queries") ||
+                   errorMessage.Contains("Sorry...");
+        }
+
+        private bool HandleIpBlockWarning()
+        {
+            if (_ipBlockWarningShown) return true;
+
+            bool continuar = false;
+            this.Invoke((MethodInvoker)delegate {
+                var dr = MessageBox.Show(
+                    "O Google detectou tráfego automatizado e bloqueou seu IP temporariamente.\n\n" +
+                    "Recomendamos reiniciar seu modem para obter um novo IP.\n\n" +
+                    "Deseja CONTINUAR tentando processar as notícias restantes (usando a Groq se o Gemini falhar)?",
+                    "IP Bloqueado pelo Gemini",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                continuar = (dr == DialogResult.Yes);
+            });
+
+            _ipBlockWarningShown = true;
+
+            if (!continuar)
+            {
+                LogService.Warn("🛑 Processamento cancelado pelo usuário após bloqueio de IP.");
+                _cts?.Cancel();
+            }
+            return continuar;
+        }
+
 
 
         private async Task<ServiceResult<TopicScoresResponse>> CallAiProviderAsync(AiProvider provider, string text, string url)
@@ -537,7 +683,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 if (useGemini) _geminiSuccessCount++; else _groqSuccessCount++;
 
-                HandleClassificationSuccess(url, title, scores, summary, false);
+                HandleClassificationSuccess(url, title, scores, summary, rawText, false);
             }
             else
             {
@@ -550,7 +696,7 @@ namespace NewsImpactRanker.WinForms.Forms
         /// <summary>
         /// Processa o sucesso de uma classificação, seja vinda da IA ou do Cache.
         /// </summary>
-        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores, string summary, bool fromCache = false, string providerName = "IA")
+        private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores, string summary, string rawText, bool fromCache = false, string providerName = "IA")
         {
             NewsScoresItem item;
 
@@ -563,6 +709,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     Title = title,
                     Scores = scores,
                     Summary = summary,
+                    RawText = rawText,
                     SourceOrder = _allNewsScores.Count,
                     AiProvider = providerName // Agora o compilador vai aceitar!
                 };
@@ -578,6 +725,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     var existing = _allNewsScores.First(n => n.Url == url);
                     existing.Scores = scores;
                     existing.Summary = summary;
+                    existing.RawText = rawText;
                     existing.AiProvider = providerName;
                 }
             }
@@ -691,6 +839,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 AddExecutionSummarySection(lines);
                 AddFailedDomainsSection(lines);
                 AddFailuresSection(lines);
+                AddCostSummarySection(lines);
 
                 // 2. Salva o arquivo final
                 File.WriteAllLines(_lastReportPath, lines);
@@ -767,9 +916,22 @@ namespace NewsImpactRanker.WinForms.Forms
             lines.Add($"Descartadas por Duplicidade (♻️) : {_duplicateCount}");
             lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
             lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
+            lines.Add($"- Processados pelo DeepSeek     : {_deepSeekSuccessCount}");
             lines.Add($"- Processados pelo Groq         : {_groqSuccessCount}");
             lines.Add($"- Processados pelo Gemini       : {_geminiSuccessCount}");
+            lines.Add($"- Processados pelo Mistral      : {_mistralSuccessCount}");
             lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
+            lines.Add("");
+        }
+
+        private void AddCostSummarySection(List<string> lines)
+        {
+            lines.Add("--------------------------------------------------");
+            lines.Add("RESUMO DE CUSTOS DE IA:");
+            lines.Add($"- Gemini: prompt={CostManager.GetGeminiPromptTokens()}, completion={CostManager.GetGeminiCompletionTokens()}, total={CostManager.GetGeminiTokens()} tokens (Custo: ${CostManager.GetGeminiCost():0.000000})");
+            lines.Add($"- Groq: prompt={CostManager.GetGroqPromptTokens()}, completion={CostManager.GetGroqCompletionTokens()}, total={CostManager.GetGroqTokens()} tokens (Custo: ${CostManager.GetGroqCost():0.000000})");
+            lines.Add($"- CUSTO TOTAL DA OPERAÇÃO: ${(CostManager.GetGeminiCost() + CostManager.GetGroqCost()):0.000000}");
+            lines.Add("--------------------------------------------------");
             lines.Add("");
         }
 
@@ -1067,6 +1229,42 @@ namespace NewsImpactRanker.WinForms.Forms
             btnConfig.Enabled = enabled;
             txtUrls.Enabled = enabled;
             //nudParallelism.Enabled = enabled;
+        }
+
+        private void UpdateCostLabel()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(UpdateCostLabel));
+                return;
+            }
+
+            lblTotalCost.Text = CostManager.GetFormattedTotalCost();
+        }
+
+        private void btnCopyCost_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                Clipboard.SetText(CostManager.GetFormattedTotalCost());
+                var original = btnCopyCost.Text;
+                btnCopyCost.Text = "Copiado!";
+
+                var timer = new System.Windows.Forms.Timer();
+                timer.Interval = 1200;
+                timer.Tick += (s, args) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    if (!IsDisposed)
+                        btnCopyCost.Text = original;
+                };
+                timer.Start();
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao copiar custo", ex);
+            }
         }
 
         private void dgvResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -1384,10 +1582,20 @@ namespace NewsImpactRanker.WinForms.Forms
             // 6. Campo 4: URL
             dgvTopicResults.Columns.Add(new DataGridViewTextBoxColumn
             {
-                Name = "colTopicUrl",
+                Name = TopicUrlColumnName,
                 HeaderText = "URL",
                 DataPropertyName = "Url",
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
+            });
+
+            dgvTopicResults.Columns.Add(new DataGridViewButtonColumn
+            {
+                Name = CopyScrapColumnName,
+                HeaderText = "",
+                Text = "📋",
+                Width = 44,
+                UseColumnTextForButtonValue = true,
+                ToolTipText = "Copiar scrap"
             });
 
             // Estética adicional
@@ -1398,93 +1606,176 @@ namespace NewsImpactRanker.WinForms.Forms
             dgvTopicResults.DataSource = results;
         }        
 
-        private void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
+        private async void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
-
-            if (dgvTopicResults.Columns[e.ColumnIndex].Name != "colTopicUrl") return;
 
             try
             {
                 var row = dgvTopicResults.Rows[e.RowIndex];
-                string url = row.Cells[e.ColumnIndex].Value?.ToString();
+                string url = row.Cells[TopicUrlColumnName].Value?.ToString();
+                string columnName = dgvTopicResults.Columns[e.ColumnIndex].Name;
 
                 if (string.IsNullOrWhiteSpace(url)) return;
 
-                // 1. Copiar para a área de transferência
-                Clipboard.SetText(url);
-
-                // 2. Marcar como lido e Salvar no Cache de Resumos
-                var item = _currentTopicResults.FirstOrDefault(r => r.Url == url);
-                if (item != null)
+                if (columnName == TopicUrlColumnName)
                 {
-                    item.IsClicked = true;
-                    SaveLastResults();
-
-                    // 👉 CORREÇÃO: Buscamos a notícia completa no Cache de Avaliações
-                    // É lá que o 'Summary' e o dicionário 'Scores' completo residem
-                    if (_evaluatedCache.TryGetValue(url, out var fullNewsItem))
-                    {
-                        if (!string.IsNullOrWhiteSpace(fullNewsItem.Summary) && fullNewsItem.Scores != null)
-                        {
-                            // Descobre a categoria principal para parear com o resumo
-                            var topCategory = fullNewsItem.Scores.OrderByDescending(x => x.Value).FirstOrDefault();
-
-                            // Checa se já não está no cache de resumos para não duplicar
-                            bool alreadyInCache = _summaryCache.Any(s =>
-                                s.Summary.Equals(fullNewsItem.Summary, StringComparison.OrdinalIgnoreCase) &&
-                                s.TopCategory.Equals(topCategory.Key, StringComparison.OrdinalIgnoreCase));
-
-                            if (!alreadyInCache && topCategory.Value > 0)
-                            {
-                                _summaryCache.Add(new SummaryCacheItem
-                                {
-                                    Summary = fullNewsItem.Summary,
-                                    TopCategory = topCategory.Key,
-                                    DateAdded = DateTime.Now
-                                });
-
-                                SummaryCacheManager.SaveCache(_summaryCache);
-                                // SaveCache(); // Salva o JSON do cache de resumos
-                                LogService.Info($"[💾 CACHE SALVO] Resumo memorizado após clique: '{fullNewsItem.Summary}'");
-                            }
-                        }
-                    }
+                    Clipboard.SetText(url);
+                    MarkTopicResultAsHandled(url);
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(204, 120, 0);
+                    row.DefaultCellStyle.ForeColor = Color.White;
+                    ShowTopicGridFeedback(row, e.ColumnIndex, "✓ URL");
+                    return;
                 }
 
-                if (_currentExecutionUsesFile)
+                if (columnName == CopyScrapColumnName)
                 {
-                    RemoveUrlFromConfiguredFile(url);
+                    string scrapText = await GetOrFetchScrapTextAsync(url);
+
+                    if (string.IsNullOrWhiteSpace(scrapText))
+                    {
+                        MessageBox.Show("Esta notícia não possui scrap salvo para cópia.", "Scrap indisponível", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    Clipboard.SetText(scrapText);
+                    _evaluatedCache.TryGetValue(url, out var cachedNews);
+                    SaveSummaryToMemory(url, cachedNews);
+                    MarkTopicResultAsHandled(url);
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(204, 120, 0);
+                    row.DefaultCellStyle.ForeColor = Color.White;
+                    ShowTopicGridFeedback(row, e.ColumnIndex, "✓ Scrap");
+                    return;
                 }
 
-                // 3. Feedback Visual (Pinta a linha de laranja claro)
-                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 205);
-
-                // 4. Feedback Visual Temporário (Célula vira "Copiado!")
-                var cell = row.Cells[e.ColumnIndex];
-                var originalValue = cell.Value;
-                var originalColor = cell.Style.ForeColor;
-
-                cell.Value = "✓ Copiado!";
-                cell.Style.ForeColor = Color.Green;
-
-                var timer = new System.Windows.Forms.Timer { Interval = 1500 };
-                timer.Tick += (s, args) =>
-                {
-                    timer.Stop();
-                    timer.Dispose();
-                    if (!this.IsDisposed)
-                    {
-                        try { cell.Value = originalValue; cell.Style.ForeColor = originalColor; } catch { }
-                        UpdateInfoLabel(GetFormattedStatus($"Restam {_currentTopicResults.Count(r => !r.IsClicked)} pendentes"));
-                    }
-                };
-                timer.Start();
+                return;
             }
             catch (Exception ex)
             {
                 LogService.Error("Erro ao processar clique na URL do ranking", ex);
             }
+        }
+
+        private async Task<string> GetOrFetchScrapTextAsync(string url)
+        {
+            if (_evaluatedCache.TryGetValue(url, out var cachedNews) && !string.IsNullOrWhiteSpace(cachedNews.RawText))
+            {
+                return cachedNews.RawText;
+            }
+
+            UpdateInfoLabel(GetFormattedStatus("Buscando scrap da notícia..."));
+
+            var newsItem = await _scrapingService.ScrapeAsync(url);
+            if (newsItem == null || newsItem.Status != "Sucesso" || string.IsNullOrWhiteSpace(newsItem.RawText))
+            {
+                LogService.Warn($"Scrap sob demanda indisponível para {url}");
+                return null;
+            }
+
+            if (cachedNews == null)
+            {
+                var topicItem = _currentTopicResults.FirstOrDefault(r => r.Url == url);
+                cachedNews = new NewsScoresItem
+                {
+                    Url = url,
+                    Title = newsItem.Title,
+                    Summary = topicItem?.Summary,
+                    RawText = newsItem.RawText
+                };
+                _evaluatedCache[url] = cachedNews;
+            }
+            else
+            {
+                cachedNews.RawText = newsItem.RawText;
+                if (string.IsNullOrWhiteSpace(cachedNews.Title))
+                {
+                    cachedNews.Title = newsItem.Title;
+                }
+            }
+
+            SaveEvaluatedCache();
+            LogService.Info($"[SCRAP] Conteúdo atualizado sob demanda para {url}");
+            return newsItem.RawText;
+        }
+
+        private void SaveSummaryToMemory(string url, NewsScoresItem fullNewsItem)
+        {
+            if (fullNewsItem == null || string.IsNullOrWhiteSpace(fullNewsItem.Summary) || fullNewsItem.Scores == null)
+            {
+                return;
+            }
+
+            var topCategory = fullNewsItem.Scores.OrderByDescending(x => x.Value).FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(topCategory.Key) || topCategory.Value <= 0)
+            {
+                return;
+            }
+
+            bool alreadyInCache = _summaryCache.Any(s =>
+                s.Summary.Equals(fullNewsItem.Summary, StringComparison.OrdinalIgnoreCase) &&
+                s.TopCategory.Equals(topCategory.Key, StringComparison.OrdinalIgnoreCase));
+
+            if (alreadyInCache)
+            {
+                return;
+            }
+
+            _summaryCache.Add(new SummaryCacheItem
+            {
+                Summary = fullNewsItem.Summary,
+                TopCategory = topCategory.Key,
+                DateAdded = DateTime.Now
+            });
+
+            SummaryCacheManager.SaveCache(_summaryCache);
+            LogService.Info($"[CACHE] Resumo memorizado manualmente para a notícia: {url}");
+        }
+
+        private void MarkTopicResultAsHandled(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            var persistedResults = ReadLastResults()
+                .Where(r => !string.Equals(r.Url, url, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            SaveLastResults(persistedResults);
+
+            if (_currentExecutionUsesFile)
+            {
+                RemoveUrlFromConfiguredFile(url);
+            }
+        }
+
+        private void ShowTopicGridFeedback(DataGridViewRow row, int columnIndex, string feedbackText)
+        {
+            var cell = row.Cells[columnIndex];
+            var originalValue = cell.Value;
+            var originalColor = cell.Style.ForeColor;
+
+            cell.Value = feedbackText;
+            cell.Style.ForeColor = Color.Green;
+
+            var timer = new System.Windows.Forms.Timer { Interval = 1500 };
+            timer.Tick += (s, args) =>
+            {
+                timer.Stop();
+                timer.Dispose();
+                if (!this.IsDisposed)
+                {
+                    try
+                    {
+                        cell.Value = originalValue;
+                        cell.Style.ForeColor = originalColor;
+                    }
+                    catch
+                    {
+                    }
+
+                    UpdateInfoLabel(GetFormattedStatus($"Restam {_currentTopicResults.Count(r => !r.IsClicked)} pendentes"));
+                }
+            };
+            timer.Start();
         }
 
         private void UpdateInfoLabel(string message)
@@ -1496,6 +1787,17 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             lblInfo.Text = message;
+        }
+
+        private void ApplyVersionToCaption()
+        {
+            var fileVersion = Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyFileVersionAttribute>()?
+                .Version;
+
+            Text = string.IsNullOrWhiteSpace(fileVersion)
+                ? MainCaptionBase
+                : $"{MainCaptionBase} v{fileVersion}";
         }
 
         // METHOD v8: DelayWithCountdownAsync
@@ -1587,11 +1889,23 @@ namespace NewsImpactRanker.WinForms.Forms
         }
 
         // Método para Salvar
-        private void SaveLastResults()
+        private List<TopicResult> ReadLastResults()
+        {
+            if (!File.Exists(_lastResultsPath))
+            {
+                return new List<TopicResult>();
+            }
+
+            string json = File.ReadAllText(_lastResultsPath);
+            return JsonConvert.DeserializeObject<List<TopicResult>>(json) ?? new List<TopicResult>();
+        }
+
+        private void SaveLastResults(List<TopicResult> results = null)
         {
             try
             {
-                string json = JsonConvert.SerializeObject(_currentTopicResults, Newtonsoft.Json.Formatting.Indented);
+                var resultsToSave = results ?? _currentTopicResults;
+                string json = JsonConvert.SerializeObject(resultsToSave, Newtonsoft.Json.Formatting.Indented);
                 File.WriteAllText(_lastResultsPath, json);
             }
             catch (Exception ex)
@@ -1601,10 +1915,41 @@ namespace NewsImpactRanker.WinForms.Forms
         }
 
         // Método para Carregar
+        private void MergePendingTopicResults(List<TopicResult> newResults)
+        {
+            var mergedByUrl = new Dictionary<string, TopicResult>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var item in ReadLastResults().Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url)))
+            {
+                mergedByUrl[item.Url] = item;
+            }
+
+            foreach (var item in newResults.Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url)))
+            {
+                mergedByUrl[item.Url] = item;
+            }
+
+            _currentTopicResults = mergedByUrl.Values
+                .OrderByDescending(r => r.Score)
+                .ToList();
+
+            SaveLastResults(_currentTopicResults);
+        }
+
         private void LoadLastResults()
         {
             try
             {
+                _currentTopicResults = ReadLastResults()
+                    .Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url))
+                    .ToList();
+
+                if (_currentTopicResults.Any())
+                {
+                    DisplayTopicResults(_currentTopicResults);
+                    UpdateInfoLabel($"Carregados {_currentTopicResults.Count} resultados nÃ£o lidos da Ãºltima sessÃ£o.");
+                }
+
                 if (File.Exists(_lastResultsPath))
                 {
                     string json = File.ReadAllText(_lastResultsPath);
@@ -1630,11 +1975,11 @@ namespace NewsImpactRanker.WinForms.Forms
         private void MainForm_Load(object sender, EventArgs e)
         {
             LogService.Info(">>> Aplicativo Iniciado. Carregando memórias...");
+            ApplyVersionToCaption();
             LoadLastResults();
             LoadEvaluatedCache();
-
-            // 👉 CARREGA O NOVO CACHE AQUI:
-            SummaryCacheManager.LoadCache();
+            _summaryCache = SummaryCacheManager.LoadCache();
+            UpdateCostLabel();
         }
 
         private void button1_Click(object sender, EventArgs e)

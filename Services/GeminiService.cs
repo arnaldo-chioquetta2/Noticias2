@@ -4,87 +4,114 @@ using System.Text;
 using Newtonsoft.Json;
 using System.Net.Http;
 using System.Threading.Tasks;
+using NewsImpactRanker.WinForms.Models;
+using NewsImpactRanker.WinForms.Services;
 using NewsImpactRanker.WinForms.Storage;
 
-public class GeminiService
+namespace NewsImpactRanker.WinForms.Services
 {
-    private readonly HttpClient _httpClient;
-
-    public GeminiService()
+    public class GeminiService : IAiProvider
     {
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-    }
+        private readonly HttpClient _httpClient;
 
-    public async Task<(bool Success, dynamic Data, string ErrorMessage)> ClassifyNewsAsync(string text)
-    {
-        // METHOD v9: ClassifyNewsAsync (Gemini) - Blindado contra JSON corrompido
-        var config = StorageManager.LoadConfig();
+        public string Name => "GEMINI";
 
-        if (string.IsNullOrWhiteSpace(config.GeminiApiKey))
-            return (false, null, "Chave API do Gemini não configurada.");
-
-        try
+        public GeminiService()
         {
-            // 1. Lê e ajusta o prompt dinamicamente
-            string promptSystem = File.ReadAllText(config.PromptFilePath);
-            promptSystem = promptSystem.Replace("10 words", $"{config.SummaryWordCount} words");
-            promptSystem = promptSystem.Replace("10 palavras", $"{config.SummaryWordCount} palavras");
+            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        }
 
-            string url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={config.GeminiApiKey}";
+        public async Task<(bool Success, dynamic Data, string ErrorMessage)> ClassifyNewsAsync(string text)
+        {
+            var result = await ClassifyAsync(text, null);
+            return (result.Success, result.Data, result.ErrorMessage);
+        }
 
-            // 2. Monta o Payload com limite de 2048 tokens (fôlego de sobra)
-            var requestBody = new
-            {
-                contents = new[] {
-                new {
-                    parts = new[] {
-                        new { text = $"{promptSystem}\n\nARTICLE:\n{text}" }
-                    }
-                }
-            },
-                generationConfig = new
-                {
-                    temperature = 0.1, // Mantém a resposta técnica e menos criativa
-                    maxOutputTokens = 3072 // Ajustado porque estava dando erro : Limite de Tokens (Unterminated String)
-                }
-            };
-            // maxOutputTokens = 2048
+        public async Task<ServiceResult<TopicScoresResponse>> ClassifyAsync(string text, string prompt)
+        {
+            LogService.Info("METHOD v1: ClassifyAsync");
+            var config = StorageManager.LoadConfig();
 
-            string jsonPayload = JsonConvert.SerializeObject(requestBody);
-            var response = await _httpClient.PostAsync(url, new StringContent(jsonPayload, Encoding.UTF8, "application/json"));
-            string jsonResponse = await response.Content.ReadAsStringAsync();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                return (false, null, $"Erro HTTP Gemini: {response.StatusCode} - {jsonResponse}");
-            }
-
-            dynamic resp = JsonConvert.DeserializeObject(jsonResponse);
-            if (resp.candidates == null || resp.candidates.Count == 0)
-                return (false, null, "IA não retornou candidatos de resposta.");
-
-            // 3. EXTRAÇÃO E LIMPEZA DO TEXTO (Onde os erros acontecem)
-            string rawText = resp.candidates[0].content.parts[0].text;
-
-            // Limpa marcações markdown e espaços em branco nas pontas
-            string cleanJson = rawText.Replace("```json", "").Replace("```", "").Trim();
+            if (string.IsNullOrWhiteSpace(config.GeminiApiKey))
+                return ServiceResult<TopicScoresResponse>.Fail("Chave API do Gemini não configurada.");
 
             try
             {
-                // Tenta converter o texto limpo em um objeto dinâmico
-                var scores = JsonConvert.DeserializeObject<dynamic>(cleanJson);
-                return (true, scores, null);
-            }
-            catch (JsonReaderException jex)
-            {
-                // Se o JSON estiver quebrado (o erro de 'Unterminated string' cai aqui)
-                return (false, null, $"JSON Corrompido pela IA Gemini: {jex.Message}. Texto recebido: {cleanJson.Substring(0, Math.Min(cleanJson.Length, 100))}...");
-            }
-        }
-        catch (Exception ex)
-        {
-            return (false, null, $"Exceção GeminiService (v9): {ex.Message}");
-        }
-    }
+                string promptSystem = prompt;
+                if (string.IsNullOrWhiteSpace(promptSystem))
+                {
+                    if (string.IsNullOrWhiteSpace(config.PromptFilePath) || !File.Exists(config.PromptFilePath))
+                        return ServiceResult<TopicScoresResponse>.Fail("Arquivo de prompt não encontrado.");
 
+                    promptSystem = File.ReadAllText(config.PromptFilePath);
+                }
+
+                promptSystem = promptSystem.Replace("10 words", $"{config.SummaryWordCount} words");
+                promptSystem = promptSystem.Replace("10 palavras", $"{config.SummaryWordCount} palavras");
+
+                string model = string.IsNullOrWhiteSpace(config.GeminiModel) ? "gemini-2.0-flash" : config.GeminiModel;
+                string url = $"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={config.GeminiApiKey}";
+
+                var requestBody = new
+                {
+                    contents = new[] {
+                        new {
+                            parts = new[] {
+                                new { text = $"{promptSystem}\n\nARTICLE:\n{text}" }
+                            }
+                        }
+                    },
+                    generationConfig = new
+                    {
+                        temperature = 0.1,
+                        maxOutputTokens = 3072
+                    }
+                };
+
+                string jsonPayload = JsonConvert.SerializeObject(requestBody);
+                var response = await _httpClient.PostAsync(url, new StringContent(jsonPayload, Encoding.UTF8, "application/json"));
+                string jsonResponse = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return ServiceResult<TopicScoresResponse>.Fail($"Erro HTTP Gemini: {(int)response.StatusCode} {response.StatusCode} - {jsonResponse}");
+                }
+
+                dynamic resp = JsonConvert.DeserializeObject(jsonResponse);
+                if (resp.candidates == null || resp.candidates.Count == 0)
+                    return ServiceResult<TopicScoresResponse>.Fail("Gemini não retornou candidatos de resposta.");
+
+                string rawText = resp.candidates[0].content.parts[0].text;
+                try
+                {
+                    int promptTokens = 0;
+                    int completionTokens = 0;
+
+                    if (resp.usageMetadata != null)
+                    {
+                        promptTokens = resp.usageMetadata.promptTokenCount != null ? (int)resp.usageMetadata.promptTokenCount : 0;
+                        completionTokens = resp.usageMetadata.candidatesTokenCount != null ? (int)resp.usageMetadata.candidatesTokenCount : 0;
+                        CostManager.AddGeminiUsage(promptTokens, completionTokens);
+                        LogService.Info($"[GEMINI] usage prompt={promptTokens} completion={completionTokens}");
+                        LogService.Info(CostManager.GetSingleLineCostSummary());
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogService.Warn($"[GEMINI] Falha ao ler usageMetadata: {ex.Message}");
+                }
+
+                return AiResponseParser.ParseAndNormalize(rawText, Name);
+            }
+            catch (TaskCanceledException)
+            {
+                return ServiceResult<TopicScoresResponse>.Fail("Timeout ao chamar Gemini.");
+            }
+            catch (Exception ex)
+            {
+                return ServiceResult<TopicScoresResponse>.Fail($"Exceção GeminiService: {ex.Message}");
+            }
+        }
+
+    }
 }

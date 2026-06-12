@@ -13,4 +13,6 @@ public class NewsScoresItem
     public string Summary { get; set; }
 
     public string AiProvider { get; set; }
+
+    public string RawText { get; set; }
 }

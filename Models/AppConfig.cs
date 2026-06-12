@@ -1,15 +1,21 @@
 ﻿namespace NewsImpactRanker.WinForms.Models
 {
-    public enum AiProvider { Groq, Gemini }
+    public enum AiProvider { DeepSeek, Groq, Gemini, Mistral }
 
     public class AppConfig
     {
         // Chaves de API
         public string AiApiKey { get; set; }      // Para o Groq
         public string GeminiApiKey { get; set; }  // Para o Gemini
+        public string DeepSeekApiKey { get; set; }
+        public string DeepSeekModel { get; set; } = "deepseek-chat";
+        public string DeepSeekBaseUrl { get; set; } = "https://api.deepseek.com";
+        public string ProviderPriority { get; set; } = "DeepSeek>Groq>Gemini";
+        public string MistralApiKey { get; set; }
+        public string MistralModel { get; set; } = "open-mixtral-8x7b";
 
         // Preferências
-        public AiProvider SelectedProvider { get; set; } = AiProvider.Groq;
+        public AiProvider SelectedProvider { get; set; } = AiProvider.DeepSeek;
 
         // Aqui está a correção: mudei para SelectedModel para ficar claro
         public string SelectedModel { get; set; } = "llama-3.1-8b-instant";

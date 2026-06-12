@@ -41,6 +41,8 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colTopicScore = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.lblInfo = new System.Windows.Forms.Label();
             this.btZeraCache = new System.Windows.Forms.Button();
+            this.lblTotalCost = new System.Windows.Forms.Label();
+            this.btnCopyCost = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).BeginInit();
             this.SuspendLayout();
@@ -258,12 +260,33 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btZeraCache.UseVisualStyleBackColor = true;
             //this.btZeraCache.Click += new System.EventHandler(this.btZeraCache_Click);
             // 
+            // lblTotalCost
+            // 
+            this.lblTotalCost.AutoSize = true;
+            this.lblTotalCost.Location = new System.Drawing.Point(12, 586);
+            this.lblTotalCost.Name = "lblTotalCost";
+            this.lblTotalCost.Size = new System.Drawing.Size(121, 13);
+            this.lblTotalCost.TabIndex = 1002;
+            this.lblTotalCost.Text = "Total: $0.0000";
+            // 
+            // btnCopyCost
+            // 
+            this.btnCopyCost.Location = new System.Drawing.Point(200, 581);
+            this.btnCopyCost.Name = "btnCopyCost";
+            this.btnCopyCost.Size = new System.Drawing.Size(110, 23);
+            this.btnCopyCost.TabIndex = 1003;
+            this.btnCopyCost.Text = "Copiar Custo";
+            this.btnCopyCost.UseVisualStyleBackColor = true;
+            this.btnCopyCost.Click += new System.EventHandler(this.btnCopyCost_Click);
+            // 
             // MainForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1180, 589);
+            this.ClientSize = new System.Drawing.Size(1180, 620);
             this.Controls.Add(this.btZeraCache);
+            this.Controls.Add(this.btnCopyCost);
+            this.Controls.Add(this.lblTotalCost);
             this.Controls.Add(this.lblInfo);
             this.Controls.Add(this.btnOpenLog);
             this.Controls.Add(this.btnOpenReport);
@@ -310,5 +333,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.DataGridViewTextBoxColumn colTopicScore;
         private Label lblInfo;
         private Button btZeraCache;
+        private Label lblTotalCost;
+        private Button btnCopyCost;
     }
 }
