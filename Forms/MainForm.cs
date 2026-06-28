@@ -37,7 +37,9 @@ namespace NewsImpactRanker.WinForms.Forms
         private readonly ScrapingService _scrapingService;
         private readonly GroqService _groqService;
         private readonly DeepSeekService _deepSeekService;
+
         private readonly MistralService _mistralService;
+        private readonly KimiService _kimiService;
         private CancellationTokenSource _cts;        
         private bool _currentExecutionUsesFile = true;
         private readonly List<string> _failedDomains = new List<string>();
@@ -90,7 +92,9 @@ namespace NewsImpactRanker.WinForms.Forms
             _deepSeekService = new DeepSeekService();
             _groqService = new GroqService();
             _geminiService = new GeminiService();
+
             _mistralService = new MistralService();
+            _kimiService = new KimiService();
             dgvResults.SortCompare += DgvResults_SortCompare;
             ApplyVersionToCaption();
             LoadLastResults();
@@ -394,6 +398,9 @@ namespace NewsImpactRanker.WinForms.Forms
             }
             else
             {
+                if (string.Equals(provider.Name, "KIMI", StringComparison.OrdinalIgnoreCase))
+                    LogService.Error($"[KIMI] Erro final: {aiResult.ErrorMessage}");
+
                 LogService.Error($"❌ Falha definitiva: Nenhuma IA processou {url}");
                 _iaErrorCount++;
             }
@@ -440,6 +447,8 @@ namespace NewsImpactRanker.WinForms.Forms
                     return _geminiService;
                 case AiProvider.Mistral:
                     return _mistralService;
+                case AiProvider.Kimi:
+                    return _kimiService;
                 default:
                     throw new InvalidOperationException("Provedor de IA invalido.");
             }
@@ -457,6 +466,8 @@ namespace NewsImpactRanker.WinForms.Forms
                     return string.IsNullOrWhiteSpace(config.GeminiApiKey) ? "A chave API do Gemini nao foi configurada." : null;
                 case AiProvider.Mistral:
                     return string.IsNullOrWhiteSpace(config.MistralApiKey) ? "A chave API da Mistral nao foi configurada." : null;
+                case AiProvider.Kimi:
+                    return string.IsNullOrWhiteSpace(config.KimiApiKey) ? "A chave API da Kimi nao foi configurada." : null;
                 default:
                     return "Provedor de IA invalido.";
             }

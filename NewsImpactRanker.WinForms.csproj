@@ -92,7 +92,9 @@
     <Compile Include="Services\AiResponseParser.cs" />
     <Compile Include="Services\DeepSeekService.cs" />
     <Compile Include="Services\CostManager.cs" />
+
     <Compile Include="Services\MistralService.cs" />
+    <Compile Include="Services\KimiService.cs" />
     <Compile Include="Services\AiRouterService.cs" />
     <Compile Include="Services\ScrapingService.cs" />
     <Compile Include="Services\CacheService.cs" />

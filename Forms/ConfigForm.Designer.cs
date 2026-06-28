@@ -43,6 +43,15 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btnCancel = new System.Windows.Forms.Button();
             this.nudSummaryWordCount = new System.Windows.Forms.NumericUpDown();
             this.label5 = new System.Windows.Forms.Label();
+            this.tabConfig = new System.Windows.Forms.TabControl();
+            this.tabGeral = new System.Windows.Forms.TabPage();
+            this.tabGroq = new System.Windows.Forms.TabPage();
+            this.tabGemini = new System.Windows.Forms.TabPage();
+            this.tabDeepSeek = new System.Windows.Forms.TabPage();
+            this.tabMistral = new System.Windows.Forms.TabPage();
+            this.tabKimi = new System.Windows.Forms.TabPage();
+            this.labelGeminiModel = new System.Windows.Forms.Label();
+            this.txtGeminiModel = new System.Windows.Forms.TextBox();
             ((System.ComponentModel.ISupportInitialize)(this.nudSummaryWordCount)).BeginInit();
             this.SuspendLayout();
             // 
@@ -299,7 +308,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(410, 606);
+            this.ClientSize = new System.Drawing.Size(520, 320);
             this.Controls.Add(this.labelMistralApiKey);
             this.Controls.Add(this.txtMistralApiKey);
             this.Controls.Add(this.labelMistralModel);
@@ -328,6 +337,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.Controls.Add(this.label3);
             this.Controls.Add(this.txtNewsFile);
             this.Controls.Add(this.btnBrowse);
+            this.ConfigureTabs();
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -339,6 +349,108 @@ namespace NewsImpactRanker.WinForms.Forms
             this.ResumeLayout(false);
             this.PerformLayout();
 
+        }
+
+        private void ConfigureTabs()
+        {
+            this.tabConfig.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.tabConfig.Name = "tabConfig";
+            this.tabConfig.Padding = new System.Drawing.Point(12, 5);
+            this.tabConfig.Controls.AddRange(new System.Windows.Forms.Control[] {
+                this.tabGeral, this.tabGroq, this.tabGemini,
+                this.tabDeepSeek, this.tabMistral, this.tabKimi
+            });
+
+            ConfigurePage(this.tabGeral, "Geral");
+            ConfigurePage(this.tabGroq, "Groq");
+            ConfigurePage(this.tabGemini, "Gemini");
+            ConfigurePage(this.tabDeepSeek, "DeepSeek");
+            ConfigurePage(this.tabMistral, "Mistral");
+            ConfigurePage(this.tabKimi, "Kimi");
+
+            ConfigureGeneralTab();
+            ConfigureProviderTabs();
+            this.Controls.Add(this.tabConfig);
+            this.tabConfig.BringToFront();
+        }
+
+        private void ConfigureGeneralTab()
+        {
+            this.tabGeral.Controls.AddRange(new System.Windows.Forms.Control[] {
+                this.labelProvider, this.cmbProvider,
+                this.label3, this.txtNewsFile, this.btnBrowse,
+                this.label4, this.txtPromptFile, this.btnBrowsePrompt,
+                this.label5, this.nudSummaryWordCount,
+                this.btnSave, this.btnCancel
+            });
+            ConfigureGeneralFields();
+        }
+
+        private void ConfigureGeneralFields()
+        {
+            SetField(this.labelProvider, this.cmbProvider, "Provider de IA", 20, 460);
+            SetFileField(this.label3, this.txtNewsFile, this.btnBrowse, "Arquivo de noticias", 74);
+            SetFileField(this.label4, this.txtPromptFile, this.btnBrowsePrompt, "Arquivo de prompt", 128);
+            ConfigureGeneralActions();
+        }
+
+        private void ConfigureGeneralActions()
+        {
+            this.label5.Text = "Numero de palavras do resumo";
+            this.label5.Location = new System.Drawing.Point(22, 182);
+            this.nudSummaryWordCount.Location = new System.Drawing.Point(22, 202);
+            this.nudSummaryWordCount.Size = new System.Drawing.Size(90, 20);
+            SetButton(this.btnSave, "Salvar", 310, 232, 82);
+            SetButton(this.btnCancel, "Cancelar", 400, 232, 82);
+        }
+
+        private void ConfigureProviderTabs()
+        {
+            AddProviderField(this.tabGroq, this.label1, this.txtApiKey, "API Key", 24);
+            AddProviderField(this.tabGroq, this.label2, this.txtModel, "Modelo", 82);
+            AddProviderField(this.tabGemini, this.labelGemini, this.txtGeminiApiKey, "API Key", 24);
+            AddProviderField(this.tabGemini, this.labelGeminiModel, this.txtGeminiModel, "Modelo", 82);
+            AddProviderField(this.tabDeepSeek, this.labelDeepSeek, this.txtDeepSeekApiKey, "API Key", 24);
+            AddProviderField(this.tabDeepSeek, this.labelDeepSeekModel, this.txtDeepSeekModel, "Modelo", 82);
+            AddProviderField(this.tabDeepSeek, this.labelDeepSeekBaseUrl, this.txtDeepSeekBaseUrl, "Base URL", 140);
+            AddProviderField(this.tabMistral, this.labelMistralApiKey, this.txtMistralApiKey, "API Key", 24);
+            AddProviderField(this.tabMistral, this.labelMistralModel, this.txtMistralModel, "Modelo", 82);
+        }
+
+        private static void ConfigurePage(System.Windows.Forms.TabPage page, string text)
+        {
+            page.BackColor = System.Drawing.SystemColors.Control;
+            page.Padding = new System.Windows.Forms.Padding(3);
+            page.Text = text;
+        }
+
+        private static void SetField(System.Windows.Forms.Label label, System.Windows.Forms.Control control, string text, int y, int width)
+        {
+            label.AutoSize = true;
+            label.Location = new System.Drawing.Point(22, y);
+            label.Text = text;
+            control.Location = new System.Drawing.Point(22, y + 20);
+            control.Size = new System.Drawing.Size(width, control.Height);
+        }
+
+        private static void SetFileField(System.Windows.Forms.Label label, System.Windows.Forms.TextBox textBox, System.Windows.Forms.Button button, string text, int y)
+        {
+            SetField(label, textBox, text, y, 362);
+            SetButton(button, "Selecionar...", 390, y + 18, 92);
+        }
+
+        private static void SetButton(System.Windows.Forms.Button button, string text, int x, int y, int width)
+        {
+            button.Location = new System.Drawing.Point(x, y);
+            button.Size = new System.Drawing.Size(width, 25);
+            button.Text = text;
+        }
+
+        private static void AddProviderField(System.Windows.Forms.TabPage page, System.Windows.Forms.Label label, System.Windows.Forms.TextBox textBox, string text, int y)
+        {
+            SetField(label, textBox, text, y, 444);
+            page.Controls.Add(label);
+            page.Controls.Add(textBox);
         }
 
         private System.Windows.Forms.Label labelProvider;
@@ -369,5 +481,14 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.Button btnBrowsePrompt;
         private System.Windows.Forms.NumericUpDown nudSummaryWordCount;
         private System.Windows.Forms.Label label5;
+        private System.Windows.Forms.TabControl tabConfig;
+        private System.Windows.Forms.TabPage tabGeral;
+        private System.Windows.Forms.TabPage tabGroq;
+        private System.Windows.Forms.TabPage tabGemini;
+        private System.Windows.Forms.TabPage tabDeepSeek;
+        private System.Windows.Forms.TabPage tabMistral;
+        private System.Windows.Forms.TabPage tabKimi;
+        private System.Windows.Forms.Label labelGeminiModel;
+        private System.Windows.Forms.TextBox txtGeminiModel;
     }
 }
