@@ -107,20 +107,110 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             try
             {
+                LogService.Info($"[CACHE] Arquivo: {_cachePath}");
                 if (File.Exists(_cachePath))
                 {
                     string json = File.ReadAllText(_cachePath);
                     _evaluatedCache = JsonConvert.DeserializeObject<Dictionary<string, NewsScoresItem>>(json)
                                       ?? new Dictionary<string, NewsScoresItem>();
 
-                    LogService.Info($"[CACHE] Memória carregada: {_evaluatedCache.Count} avaliações anteriores prontas para reuso.");
+                    LogService.Info($"[CACHE] Entradas carregadas: {_evaluatedCache.Count}");
+                }
+                else
+                {
+                    _evaluatedCache = new Dictionary<string, NewsScoresItem>();
+                    LogService.Info("[CACHE] Arquivo não encontrado; iniciando cache vazio");
                 }
             }
             catch (Exception ex)
             {
-                LogService.Error("[CACHE] Erro ao carregar memória de avaliações.", ex);
+                LogService.Error($"[CACHE] Erro ao carregar cache: {ex.Message}", ex);
                 _evaluatedCache = new Dictionary<string, NewsScoresItem>();
             }
+        }
+
+        private static string NormalizeCacheUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return string.Empty;
+
+            string trimmed = url.Trim();
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out Uri uri)) return trimmed;
+
+            var builder = new UriBuilder(uri)
+            {
+                Fragment = string.Empty,
+                Scheme = uri.Scheme.ToLowerInvariant(),
+                Host = uri.Host.ToLowerInvariant()
+            };
+
+            string normalized = builder.Uri.AbsoluteUri;
+            if (normalized.EndsWith("/") && builder.Path != "/")
+                normalized = normalized.TrimEnd('/');
+
+            return normalized;
+        }
+
+        private bool TryGetEvaluatedCache(string url, out NewsScoresItem cachedItem, out bool legacy)
+        {
+            cachedItem = null;
+            legacy = false;
+            string normalizedUrl = NormalizeCacheUrl(url);
+
+            if (string.IsNullOrWhiteSpace(normalizedUrl))
+            {
+                LogService.Info("[CACHE] MISS: URL inválida ou vazia");
+                return false;
+            }
+
+            foreach (var pair in _evaluatedCache)
+            {
+                string cachedUrl = NormalizeCacheUrl(pair.Key);
+                string itemUrl = NormalizeCacheUrl(pair.Value?.Url);
+                if (!string.Equals(cachedUrl, normalizedUrl, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(itemUrl, normalizedUrl, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!IsValidEvaluatedCacheItem(pair.Value))
+                {
+                    LogService.Info("[CACHE] MISS: entrada encontrada, porém inválida ou incompleta");
+                    return false;
+                }
+
+                cachedItem = pair.Value;
+                string provider = (cachedItem.AiProvider ?? string.Empty).Trim();
+                legacy = string.IsNullOrWhiteSpace(provider) ||
+                         string.Equals(provider, "IA", StringComparison.OrdinalIgnoreCase) ||
+                         !new[] { "DEEPSEEK", "GROQ", "GEMINI", "MISTRAL", "KIMI" }
+                             .Contains(provider.ToUpperInvariant());
+                return true;
+            }
+
+            LogService.Info("[CACHE] MISS: URL não encontrada");
+            return false;
+        }
+
+        private static bool IsValidEvaluatedCacheItem(NewsScoresItem item)
+        {
+            return item != null &&
+                   !string.IsNullOrWhiteSpace(item.Url) &&
+                   !string.IsNullOrWhiteSpace(item.Summary) &&
+                   item.Scores != null &&
+                   item.Scores.Count > 0;
+        }
+
+        private void UpsertEvaluatedCache(string url, NewsScoresItem item)
+        {
+            string normalizedUrl = NormalizeCacheUrl(url);
+            string existingKey = _evaluatedCache.Keys.FirstOrDefault(key =>
+                string.Equals(NormalizeCacheUrl(key), normalizedUrl, StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrWhiteSpace(existingKey) && !string.Equals(existingKey, normalizedUrl, StringComparison.Ordinal))
+                _evaluatedCache.Remove(existingKey);
+
+            _evaluatedCache[normalizedUrl] = item;
+            SaveEvaluatedCache();
+            LogService.Info($"[CACHE] Entrada atualizada: {normalizedUrl}");
+            LogService.Info($"[CACHE] Entradas em memória: {_evaluatedCache.Count}");
         }
 
         private void DgvResults_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
@@ -355,6 +445,36 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private async Task ProcessSingleUrlAsync(string url)
         {
+            string normalizedUrl = NormalizeCacheUrl(url);
+            LogService.Info($"[CACHE] Consultando: {normalizedUrl}");
+
+            if (TryGetEvaluatedCache(normalizedUrl, out var cachedItem, out bool legacy))
+            {
+                _cacheHitCount++;
+                _successCount++;
+
+                LogService.Info(legacy
+                    ? $"[CACHE] HIT legado: {normalizedUrl}"
+                    : $"[CACHE] HIT: {normalizedUrl}");
+
+                lock (_allNewsScores)
+                {
+                    _allNewsScores.Add(new NewsScoresItem
+                    {
+                        Url = normalizedUrl,
+                        Title = cachedItem.Title,
+                        Summary = cachedItem.Summary,
+                        Scores = new Dictionary<string, int>(cachedItem.Scores),
+                        AiProvider = cachedItem.AiProvider,
+                        RawText = cachedItem.RawText,
+                        SourceOrder = _successCount
+                    });
+                }
+
+                LogService.Info("[CACHE] Resultado restaurado sem scraping e sem IA");
+                return;
+            }
+
             // 1. Scraping
             var newsItem = await _scrapingService.ScrapeAsync(url);
 
@@ -395,6 +515,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
                 _successCount++;
                 IncrementProviderCounter(provider.Name);
+                UpsertEvaluatedCache(normalizedUrl, resultScore);
             }
             else
             {
