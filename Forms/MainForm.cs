@@ -33,6 +33,17 @@ namespace NewsImpactRanker.WinForms.Forms
         //private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache.json");
         private List<TopicResult> _currentTopicResults = new List<TopicResult>();
         private Dictionary<string, NewsScoresItem> _evaluatedCache = new Dictionary<string, NewsScoresItem>();
+        private readonly object _evaluatedCacheFileLock = new object();
+
+        private sealed class CacheUrlComparison
+        {
+            public string StoredUrl { get; set; }
+            public string NormalizedStoredUrl { get; set; }
+            public bool SameHost { get; set; }
+            public bool SamePath { get; set; }
+            public bool SameQuery { get; set; }
+            public string DifferenceReason { get; set; }
+        }
 
         private readonly ScrapingService _scrapingService;
         private readonly GroqService _groqService;
@@ -97,6 +108,8 @@ namespace NewsImpactRanker.WinForms.Forms
             _kimiService = new KimiService();
             dgvResults.SortCompare += DgvResults_SortCompare;
             ApplyVersionToCaption();
+            LogService.WriteApplicationHeader();
+            LogApplicationIdentity();
             LoadLastResults();
             LoadEvaluatedCache();
             _summaryCache = SummaryCacheManager.LoadCache();
@@ -115,6 +128,8 @@ namespace NewsImpactRanker.WinForms.Forms
                                       ?? new Dictionary<string, NewsScoresItem>();
 
                     LogService.Info($"[CACHE] Entradas carregadas: {_evaluatedCache.Count}");
+                    LogService.Info($"[CACHE] Data de modificação: {File.GetLastWriteTime(_cachePath):o}");
+                    LogService.Info($"[CACHE] Tamanho: {new FileInfo(_cachePath).Length} bytes");
                 }
                 else
                 {
@@ -150,15 +165,88 @@ namespace NewsImpactRanker.WinForms.Forms
             return normalized;
         }
 
+        private void LogApplicationIdentity()
+        {
+            string executablePath = Application.ExecutablePath;
+            var executableInfo = File.Exists(executablePath) ? new FileInfo(executablePath) : null;
+            var assembly = Assembly.GetExecutingAssembly();
+
+            LogService.Info($"[APP] Executável: {executablePath}");
+            LogService.Info($"[APP] BaseDirectory: {AppDomain.CurrentDomain.BaseDirectory}");
+            LogService.Info($"[APP] AssemblyLocation: {assembly.Location}");
+            LogService.Info($"[APP] Versão: {assembly.GetName().Version}");
+            if (executableInfo != null)
+                LogService.Info($"[APP] Modificado em: {executableInfo.LastWriteTime:o}");
+        }
+
+        private static bool IsClearlyContaminatedUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return true;
+
+            string value = url.Trim();
+            return value.Contains("<") || value.Contains(">") ||
+                   value.IndexOf("target=\"", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   value.IndexOf("http://", StringComparison.OrdinalIgnoreCase) !=
+                   value.LastIndexOf("http://", StringComparison.OrdinalIgnoreCase) ||
+                   value.IndexOf("https://", StringComparison.OrdinalIgnoreCase) !=
+                   value.LastIndexOf("https://", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private IEnumerable<CacheUrlComparison> FindSimilarCacheUrls(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri requestedUri))
+                return Enumerable.Empty<CacheUrlComparison>();
+
+            var candidates = new List<CacheUrlComparison>();
+            foreach (var pair in _evaluatedCache)
+            {
+                string storedUrl = pair.Value?.Url ?? pair.Key;
+                if (!Uri.TryCreate(storedUrl, UriKind.Absolute, out Uri storedUri))
+                    continue;
+
+                bool sameHost = string.Equals(requestedUri.Host, storedUri.Host, StringComparison.OrdinalIgnoreCase);
+                bool samePath = string.Equals(requestedUri.AbsolutePath, storedUri.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+                bool sameQuery = string.Equals(requestedUri.Query, storedUri.Query, StringComparison.Ordinal);
+                if (!sameHost && !samePath) continue;
+
+                string reason;
+                if (sameHost && samePath && !sameQuery)
+                    reason = "query string";
+                else if (sameHost && samePath && !string.Equals(requestedUri.Scheme, storedUri.Scheme, StringComparison.OrdinalIgnoreCase))
+                    reason = "esquema http/https";
+                else if (sameHost && samePath && !string.Equals(requestedUri.Fragment, storedUri.Fragment, StringComparison.Ordinal))
+                    reason = "fragmento";
+                else if (samePath && !sameHost)
+                    reason = "host/www/subdomínio";
+                else
+                    reason = "caminho diferente";
+
+                candidates.Add(new CacheUrlComparison
+                {
+                    StoredUrl = storedUrl,
+                    NormalizedStoredUrl = NormalizeCacheUrl(storedUrl),
+                    SameHost = sameHost,
+                    SamePath = samePath,
+                    SameQuery = sameQuery,
+                    DifferenceReason = reason
+                });
+            }
+
+            return candidates.Take(5).ToList();
+        }
+
         private bool TryGetEvaluatedCache(string url, out NewsScoresItem cachedItem, out bool legacy)
         {
             cachedItem = null;
             legacy = false;
             string normalizedUrl = NormalizeCacheUrl(url);
 
-            if (string.IsNullOrWhiteSpace(normalizedUrl))
+            LogService.Info($"[CACHE] Diagnóstico lookup: original={url}");
+            LogService.Info($"[CACHE] Diagnóstico lookup: normalizada={normalizedUrl}");
+
+            if (IsClearlyContaminatedUrl(url) || string.IsNullOrWhiteSpace(normalizedUrl))
             {
-                LogService.Info("[CACHE] MISS: URL inválida ou vazia");
+                LogService.Info($"[CACHE] URL inválida para lookup: {url}");
                 return false;
             }
 
@@ -172,7 +260,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 if (!IsValidEvaluatedCacheItem(pair.Value))
                 {
-                    LogService.Info("[CACHE] MISS: entrada encontrada, porém inválida ou incompleta");
+                    LogService.Info("[CACHE] MISS diagnóstico");
+                    LogService.Info("[CACHE] Motivo: entrada encontrada, porém inválida ou incompleta");
                     return false;
                 }
 
@@ -185,7 +274,23 @@ namespace NewsImpactRanker.WinForms.Forms
                 return true;
             }
 
-            LogService.Info("[CACHE] MISS: URL não encontrada");
+            var similar = FindSimilarCacheUrls(url).ToList();
+            LogService.Info("[CACHE] MISS diagnóstico");
+            LogService.Info($"[CACHE] URL original: {url}");
+            LogService.Info($"[CACHE] URL normalizada para lookup: {normalizedUrl}");
+            LogService.Info($"[CACHE] Total de entradas em memória: {_evaluatedCache.Count}");
+            LogService.Info(similar.Count == 0
+                ? "[CACHE] Motivo: nenhuma entrada com mesmo host/path"
+                : $"[CACHE] Motivo: existe entrada semelhante ({similar.Count})");
+
+            int candidateNumber = 1;
+            foreach (var candidate in similar)
+            {
+                LogService.Info($"[CACHE] Candidata {candidateNumber}: {candidate.StoredUrl}");
+                LogService.Info($"[CACHE] Candidata {candidateNumber} normalizada: {candidate.NormalizedStoredUrl}");
+                LogService.Info($"[CACHE] Diferença: {candidate.DifferenceReason}");
+                candidateNumber++;
+            }
             return false;
         }
 
@@ -200,17 +305,20 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void UpsertEvaluatedCache(string url, NewsScoresItem item)
         {
-            string normalizedUrl = NormalizeCacheUrl(url);
-            string existingKey = _evaluatedCache.Keys.FirstOrDefault(key =>
-                string.Equals(NormalizeCacheUrl(key), normalizedUrl, StringComparison.OrdinalIgnoreCase));
+            lock (_evaluatedCacheFileLock)
+            {
+                string normalizedUrl = NormalizeCacheUrl(url);
+                string existingKey = _evaluatedCache.Keys.FirstOrDefault(key =>
+                    string.Equals(NormalizeCacheUrl(key), normalizedUrl, StringComparison.OrdinalIgnoreCase));
 
-            if (!string.IsNullOrWhiteSpace(existingKey) && !string.Equals(existingKey, normalizedUrl, StringComparison.Ordinal))
-                _evaluatedCache.Remove(existingKey);
+                if (!string.IsNullOrWhiteSpace(existingKey) && !string.Equals(existingKey, normalizedUrl, StringComparison.Ordinal))
+                    _evaluatedCache.Remove(existingKey);
 
-            _evaluatedCache[normalizedUrl] = item;
-            SaveEvaluatedCache();
-            LogService.Info($"[CACHE] Entrada atualizada: {normalizedUrl}");
-            LogService.Info($"[CACHE] Entradas em memória: {_evaluatedCache.Count}");
+                _evaluatedCache[normalizedUrl] = item;
+                LogService.Info($"[CACHE] Entrada atualizada: {normalizedUrl}");
+                LogService.Info($"[CACHE] Entradas em memória: {_evaluatedCache.Count}");
+                SaveEvaluatedCache();
+            }
         }
 
         private void DgvResults_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
@@ -393,6 +501,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
             finally
             {
+                SaveEvaluatedCache();
                 // Libera a interface novamente
                 ToggleUI(true);
                 UpdateCostLabel();
@@ -448,11 +557,14 @@ namespace NewsImpactRanker.WinForms.Forms
             string normalizedUrl = NormalizeCacheUrl(url);
             LogService.Info($"[CACHE] Consultando: {normalizedUrl}");
 
-            if (TryGetEvaluatedCache(normalizedUrl, out var cachedItem, out bool legacy))
+            if (TryGetEvaluatedCache(url, out var cachedItem, out bool legacy))
             {
                 _cacheHitCount++;
                 _successCount++;
 
+                LogService.Info("[CACHE] HIT");
+                LogService.Info($"[CACHE] Consultada: {normalizedUrl}");
+                LogService.Info($"[CACHE] Armazenada: {NormalizeCacheUrl(cachedItem.Url)}");
                 LogService.Info(legacy
                     ? $"[CACHE] HIT legado: {normalizedUrl}"
                     : $"[CACHE] HIT: {normalizedUrl}");
@@ -865,8 +977,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // 2. Persistência no Cache de IA
             if (!fromCache)
             {
-                _evaluatedCache[url] = item;
-                SaveEvaluatedCache();
+                UpsertEvaluatedCache(url, item);
             }
 
             UpdateStatusLabel();
@@ -933,8 +1044,25 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             try
             {
-                string json = JsonConvert.SerializeObject(_evaluatedCache, Newtonsoft.Json.Formatting.Indented);
-                File.WriteAllText(_cachePath, json);
+                LogService.Info($"[CACHE] Salvando arquivo: {_cachePath}");
+                LogService.Info($"[CACHE] Entradas a persistir: {_evaluatedCache.Count}");
+                lock (_evaluatedCacheFileLock)
+                {
+                    var snapshot = new Dictionary<string, NewsScoresItem>(_evaluatedCache);
+                    LogService.Info($"[CACHE] Entradas a persistir: {snapshot.Count}");
+                    string json = JsonConvert.SerializeObject(snapshot, Newtonsoft.Json.Formatting.Indented);
+                    LogService.Info($"[CACHE] JSON serializado: {System.Text.Encoding.UTF8.GetByteCount(json)} bytes");
+                    string tempPath = _cachePath + ".tmp";
+                    File.WriteAllText(tempPath, json, System.Text.Encoding.UTF8);
+                    if (File.Exists(_cachePath))
+                        File.Replace(tempPath, _cachePath, null, true);
+                    else
+                        File.Move(tempPath, _cachePath);
+                }
+                var fileInfo = new FileInfo(_cachePath);
+                LogService.Info("[CACHE] Arquivo salvo com sucesso");
+                LogService.Info($"[CACHE] Tamanho final: {fileInfo.Length} bytes");
+                LogService.Info($"[CACHE] Data de modificação: {fileInfo.LastWriteTime:o}");
             }
             catch (Exception ex)
             {
