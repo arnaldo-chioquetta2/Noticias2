@@ -98,6 +98,7 @@
     <Compile Include="Services\AiRouterService.cs" />
     <Compile Include="Services\ScrapingService.cs" />
     <Compile Include="Services\CacheService.cs" />
+    <Compile Include="Services\CanonicalSummaryService.cs" />
     <Compile Include="Services\LogService.cs" />
     <Compile Include="Services\ServiceResult.cs" />
     <Compile Include="Services\TokenUsageService.cs.cs" />

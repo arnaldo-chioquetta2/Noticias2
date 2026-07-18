@@ -10,6 +10,7 @@ using System.Windows.Forms;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Globalization;
 using NewsImpactRanker.WinForms.Utils;
 using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Storage;
@@ -51,6 +52,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private readonly MistralService _mistralService;
         private readonly KimiService _kimiService;
+        private readonly CanonicalSummaryService _canonicalSummaryService;
         private CancellationTokenSource _cts;        
         private bool _currentExecutionUsesFile = true;
         private readonly List<string> _failedDomains = new List<string>();
@@ -73,9 +75,21 @@ namespace NewsImpactRanker.WinForms.Forms
         // Configuração do Filtro Anti-Duplicidade
         private readonly int _summaryWordCount = 10;
         private int _duplicateCount = 0;
+        private int _resumosCanonicosGerados = 0;
+        private int _duplicatasPorResumo = 0;
+        private int _avaliacoesCompletasEvitadas = 0;
+        private int _avaliacoesCompletasExecutadas = 0;
 
         // 👉 VARIÁVEIS DO FILTRO ANTI-DUPLICIDADE
         private List<SummaryCacheItem> _summaryCache = new List<SummaryCacheItem>();
+
+        private sealed class SummaryDuplicateMatch
+        {
+            public string ExistingSummary { get; set; }
+            public string NormalizedExistingSummary { get; set; }
+            public string Reason { get; set; }
+            public double Similarity { get; set; }
+        }
 
 
         private int _processedCount = 0;
@@ -106,6 +120,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
             _mistralService = new MistralService();
             _kimiService = new KimiService();
+            _canonicalSummaryService = new CanonicalSummaryService();
             dgvResults.SortCompare += DgvResults_SortCompare;
             ApplyVersionToCaption();
             LogService.WriteApplicationHeader();
@@ -363,6 +378,10 @@ namespace NewsImpactRanker.WinForms.Forms
             _groqSuccessCount = 0;
             _geminiSuccessCount = 0;
             _mistralSuccessCount = 0;
+            _resumosCanonicosGerados = 0;
+            _duplicatasPorResumo = 0;
+            _avaliacoesCompletasEvitadas = 0;
+            _avaliacoesCompletasExecutadas = 0;
             //_falhasProcessamento.Clear();
 
             LogService.Info("=== Processamento iniciado ===");
@@ -599,8 +618,50 @@ namespace NewsImpactRanker.WinForms.Forms
 
             var config = StorageManager.LoadConfig();
 
+            LogService.Info("[DEDUP] Gerando resumo canônico antes da avaliação");
+            LogService.Info("[DEDUP] Idioma canônico: português");
+            LogService.Info($"[DEDUP] Palavras configuradas: {config.SummaryWordCount}");
+            var canonicalResult = await _canonicalSummaryService.GenerateAsync(newsItem.RawText, config);
+            if (!canonicalResult.Success || string.IsNullOrWhiteSpace(canonicalResult.Data))
+            {
+                LogService.Error($"[DEDUP] Falha ao gerar resumo canônico: {canonicalResult.ErrorMessage}");
+                _iaErrorCount++;
+                return;
+            }
+
+            string canonicalSummary = canonicalResult.Data.Trim();
+            string normalizedCanonicalSummary = NormalizeCanonicalSummary(canonicalSummary);
+            int receivedWords = CountWords(normalizedCanonicalSummary);
+            _resumosCanonicosGerados++;
+            LogService.Info($"[DEDUP] Resumo recebido: {canonicalSummary}");
+            LogService.Info($"[DEDUP] Resumo normalizado: {normalizedCanonicalSummary}");
+            LogService.Info($"[DEDUP] Quantidade recebida: {receivedWords}");
+
+            if (receivedWords != config.SummaryWordCount)
+            {
+                LogService.Error($"[DEDUP] Resumo canônico inválido: esperado {config.SummaryWordCount} palavras, recebido {receivedWords}");
+                _iaErrorCount++;
+                return;
+            }
+
+            if (IsDuplicateByCanonicalSummary(canonicalSummary, out var duplicateMatch))
+            {
+                _duplicateCount++;
+                _duplicatasPorResumo++;
+                _avaliacoesCompletasEvitadas++;
+                LogService.Info("[DEDUP] DUPLICATA PRÉ-AVALIAÇÃO");
+                LogService.Info($"[DEDUP] Resumo atual: {canonicalSummary}");
+                LogService.Info($"[DEDUP] Resumo existente: {duplicateMatch.ExistingSummary}");
+                LogService.Info($"[DEDUP] Similaridade: {duplicateMatch.Similarity:0.00} ({duplicateMatch.Reason})");
+                LogService.Info("[DEDUP] Avaliação completa evitada");
+                return;
+            }
+
+            LogService.Info("[DEDUP] Resumo não encontrado no histórico");
+
             string prompt = LoadPrompt(config);
             var provider = GetSelectedProviderService(config.SelectedProvider);
+            LogService.Info("[AI] Iniciando avaliação completa");
             LogService.Info($"[{provider.Name}] Processando URL: {url}");
             var aiResult = await provider.ClassifyAsync(newsItem.RawText, prompt);
             UpdateCostLabel();
@@ -626,8 +687,10 @@ namespace NewsImpactRanker.WinForms.Forms
                     _allNewsScores.Add(resultScore);
                 }
                 _successCount++;
+                _avaliacoesCompletasExecutadas++;
                 IncrementProviderCounter(provider.Name);
                 UpsertEvaluatedCache(normalizedUrl, resultScore);
+                SaveCanonicalSummary(canonicalSummary);
             }
             else
             {
@@ -647,6 +710,101 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             return File.ReadAllText(config.PromptFilePath);
+        }
+
+        private bool IsDuplicateByCanonicalSummary(string generatedSummary, out SummaryDuplicateMatch match)
+        {
+            match = null;
+            string normalized = NormalizeCanonicalSummary(generatedSummary);
+            int expectedWords = StorageManager.LoadConfig().SummaryWordCount > 0
+                ? StorageManager.LoadConfig().SummaryWordCount
+                : 5;
+
+            if (CountWords(normalized) != expectedWords)
+            {
+                LogService.Warn($"[DEDUP] Resumo inválido: esperado {expectedWords} palavras, recebido {CountWords(normalized)}");
+                return false;
+            }
+
+            LogService.Info("[DEDUP] Comparando exclusivamente pelo resumo");
+            foreach (var item in _summaryCache.Where(x => x.IsCanonical && !string.IsNullOrWhiteSpace(x.Summary)))
+            {
+                string existingNormalized = NormalizeCanonicalSummary(item.Summary);
+                if (string.Equals(normalized, existingNormalized, StringComparison.Ordinal))
+                {
+                    match = new SummaryDuplicateMatch
+                    {
+                        ExistingSummary = item.Summary,
+                        NormalizedExistingSummary = existingNormalized,
+                        Reason = "igualdade exata do resumo normalizado",
+                        Similarity = 1.0
+                    };
+                    return true;
+                }
+
+                double similarity = CalculateCanonicalTokenSimilarity(normalized, existingNormalized);
+                if (similarity >= 0.80 && CountWords(normalized) == CountWords(existingNormalized))
+                {
+                    match = new SummaryDuplicateMatch
+                    {
+                        ExistingSummary = item.Summary,
+                        NormalizedExistingSummary = existingNormalized,
+                        Reason = "tokens canônicos semelhantes",
+                        Similarity = similarity
+                    };
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string NormalizeCanonicalSummary(string summary)
+        {
+            if (string.IsNullOrWhiteSpace(summary)) return string.Empty;
+
+            var chars = summary.ToLowerInvariant()
+                .Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))
+                .ToArray();
+            return string.Join(" ", new string(chars)
+                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(NormalizeCanonicalToken));
+        }
+
+        private static string NormalizeCanonicalToken(string token)
+        {
+            if (token.Length > 4 && token.EndsWith("s", StringComparison.Ordinal))
+                return token.Substring(0, token.Length - 1);
+            return token;
+        }
+
+        private static int CountWords(string value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? 0 : value.Split(' ').Length;
+        }
+
+        private static double CalculateCanonicalTokenSimilarity(string left, string right)
+        {
+            var leftTokens = new HashSet<string>(left.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
+            var rightTokens = new HashSet<string>(right.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
+            if (leftTokens.Count == 0 || rightTokens.Count == 0) return 0;
+
+            int intersection = leftTokens.Intersect(rightTokens).Count();
+            int union = leftTokens.Union(rightTokens).Count();
+            return union == 0 ? 0 : (double)intersection / union;
+        }
+
+        private void SaveCanonicalSummary(string canonicalSummary)
+        {
+            if (string.IsNullOrWhiteSpace(canonicalSummary)) return;
+
+            _summaryCache.Add(new SummaryCacheItem
+            {
+                Summary = canonicalSummary.Trim(),
+                DateAdded = DateTime.Now,
+                IsCanonical = true
+            });
+            SummaryCacheManager.SaveCache(_summaryCache);
         }
 
         private void IncrementProviderCounter(string providerName)
@@ -908,8 +1066,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 if (topCategory.Value > 0 && !string.IsNullOrWhiteSpace(summary))
                 {
                     bool isDuplicate = _summaryCache.Any(s =>
-                        s.Summary.Equals(summary, StringComparison.OrdinalIgnoreCase) &&
-                        s.TopCategory.Equals(topCategory.Key, StringComparison.OrdinalIgnoreCase));
+                        string.Equals(NormalizeCanonicalSummary(s.Summary), NormalizeCanonicalSummary(summary), StringComparison.Ordinal));
 
                     if (isDuplicate)
                     {
@@ -1180,6 +1337,10 @@ namespace NewsImpactRanker.WinForms.Forms
             lines.Add($"- Processados pelo Groq         : {_groqSuccessCount}");
             lines.Add($"- Processados pelo Gemini       : {_geminiSuccessCount}");
             lines.Add($"- Processados pelo Mistral      : {_mistralSuccessCount}");
+            lines.Add($"Resumos canônicos gerados       : {_resumosCanonicosGerados}");
+            lines.Add($"Duplicatas detectadas           : {_duplicatasPorResumo}");
+            lines.Add($"Avaliações completas evitadas   : {_avaliacoesCompletasEvitadas}");
+            lines.Add($"Avaliações completas executadas : {_avaliacoesCompletasExecutadas}");
             lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
             lines.Add("");
         }
@@ -1972,8 +2133,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             bool alreadyInCache = _summaryCache.Any(s =>
-                s.Summary.Equals(fullNewsItem.Summary, StringComparison.OrdinalIgnoreCase) &&
-                s.TopCategory.Equals(topCategory.Key, StringComparison.OrdinalIgnoreCase));
+                string.Equals(NormalizeCanonicalSummary(s.Summary), NormalizeCanonicalSummary(fullNewsItem.Summary), StringComparison.Ordinal));
 
             if (alreadyInCache)
             {
