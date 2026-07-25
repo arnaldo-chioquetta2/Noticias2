@@ -1,5 +1,7 @@
-using System;
+﻿using System;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -18,7 +20,7 @@ namespace NewsImpactRanker.WinForms.Services
         public async Task<ServiceResult<string>> GenerateAsync(string text, AppConfig config)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return ServiceResult<string>.Fail("Texto vazio para geração do resumo canônico.");
+                return ServiceResult<string>.Fail("Texto vazio para geraÃ§Ã£o do resumo canÃ´nico.");
 
             int wordCount = config.SummaryWordCount > 0 ? config.SummaryWordCount : 5;
             string prompt = BuildPrompt(wordCount);
@@ -54,7 +56,7 @@ namespace NewsImpactRanker.WinForms.Services
         private async Task<ServiceResult<string>> GenerateOpenAiCompatibleAsync(string article, string prompt, string baseUrl, string model, string apiKey)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
-                return ServiceResult<string>.Fail("Chave API não configurada para gerar resumo canônico.");
+                return ServiceResult<string>.Fail("Chave API nÃ£o configurada para gerar resumo canÃ´nico.");
 
             string endpoint = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
             if (!endpoint.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) &&
@@ -85,24 +87,24 @@ namespace NewsImpactRanker.WinForms.Services
                     var response = await _httpClient.SendAsync(request);
                     string body = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode)
-                        return ServiceResult<string>.Fail($"Resumo canônico: HTTP {(int)response.StatusCode}.");
+                        return ServiceResult<string>.Fail($"Resumo canÃ´nico: HTTP {(int)response.StatusCode}.");
 
                     string content = JObject.Parse(body)["choices"]?[0]?["message"]?["content"]?.ToString();
                     return string.IsNullOrWhiteSpace(content)
-                        ? ServiceResult<string>.Fail("Resumo canônico vazio.")
-                        : ServiceResult<string>.Ok(content.Trim());
+                        ? ServiceResult<string>.Fail("Resumo canÃ´nico vazio.")
+                        : ServiceResult<string>.Ok(NormalizeCanonicalResponse(content, ExtractWordCount(prompt)));
                 }
             }
             catch (Exception ex)
             {
-                return ServiceResult<string>.Fail($"Falha ao gerar resumo canônico: {ex.Message}");
+                return ServiceResult<string>.Fail($"Falha ao gerar resumo canÃ´nico: {ex.Message}");
             }
         }
 
         private async Task<ServiceResult<string>> GenerateGeminiAsync(string article, string prompt, AppConfig config)
         {
             if (string.IsNullOrWhiteSpace(config.GeminiApiKey))
-                return ServiceResult<string>.Fail("Chave API do Gemini não configurada.");
+                return ServiceResult<string>.Fail("Chave API do Gemini nÃ£o configurada.");
 
             string model = string.IsNullOrWhiteSpace(config.GeminiModel) ? "gemini-2.0-flash" : config.GeminiModel;
             string endpoint = $"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={config.GeminiApiKey}";
@@ -119,26 +121,46 @@ namespace NewsImpactRanker.WinForms.Services
                     new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
                 string body = await response.Content.ReadAsStringAsync();
                 if (!response.IsSuccessStatusCode)
-                    return ServiceResult<string>.Fail($"Resumo canônico Gemini: HTTP {(int)response.StatusCode}.");
+                    return ServiceResult<string>.Fail($"Resumo canÃ´nico Gemini: HTTP {(int)response.StatusCode}.");
 
                 string content = JObject.Parse(body)["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.ToString();
                 return string.IsNullOrWhiteSpace(content)
-                    ? ServiceResult<string>.Fail("Resumo canônico vazio.")
-                    : ServiceResult<string>.Ok(content.Trim());
+                    ? ServiceResult<string>.Fail("Resumo canÃ´nico vazio.")
+                    : ServiceResult<string>.Ok(NormalizeCanonicalResponse(content, config.SummaryWordCount > 0 ? config.SummaryWordCount : 5));
             }
             catch (Exception ex)
             {
-                return ServiceResult<string>.Fail($"Falha ao gerar resumo canônico: {ex.Message}");
+                return ServiceResult<string>.Fail($"Falha ao gerar resumo canÃ´nico: {ex.Message}");
             }
         }
 
+        private static int ExtractWordCount(string prompt)
+        {
+            var match = Regex.Match(prompt ?? string.Empty, @"exatamente\s+(\d+)\s+palavras", RegexOptions.IgnoreCase);
+            int count;
+            return match.Success && int.TryParse(match.Groups[1].Value, out count) && count > 0 ? count : 5;
+        }
+        private static string NormalizeCanonicalResponse(string content, int wordCount)
+        {
+            string cleaned = (content ?? string.Empty).Trim();
+            var words = new string(cleaned
+                .Select(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c) ? c : ' ')
+                .ToArray())
+                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+            return string.Join(" ", words.Take(wordCount > 0 ? wordCount : 5));
+        }
         private static string BuildPrompt(int wordCount)
         {
-            return $"Gere uma chave canônica desta notícia em exatamente {wordCount} palavras. " +
+            return $"Produza uma chave canônica factual desta notícia com exatamente {wordCount} palavras separadas por espaço. " +
                    "Escreva sempre em português, independentemente do idioma original. " +
-                   "Represente somente o fato central. Use termos específicos, preserve nomes, números e conceitos técnicos. " +
-                   "Evite artigos, preposições, adjetivos promocionais e palavras genéricas. " +
-                   "Use formas linguísticas estáveis. Não use pontuação. Retorne somente as " + wordCount + " palavras.";
+                   "Identifique o mesmo acontecimento com os mesmos conceitos centrais. Preserve entidade principal, ação principal, objeto principal, nomes próprios, números e locais relevantes. " +
+                   "Use palavras no singular e verbos no infinitivo. Não use artigos, preposições, pontuação ou comentários. " +
+                   "Evite sinônimos e reescrita criativa quando existir termo direto. Retorne somente a chave.";
         }
     }
 }
+
+
+
+

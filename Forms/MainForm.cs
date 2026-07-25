@@ -1,20 +1,21 @@
-using System;
-using System.IO;
-using System.Data;
-using System.Linq;
-using System.Drawing;
-using Newtonsoft.Json;
-using System.Threading;
-using System.Diagnostics;
-using System.Windows.Forms;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Globalization;
-using NewsImpactRanker.WinForms.Utils;
-using NewsImpactRanker.WinForms.Models;
-using NewsImpactRanker.WinForms.Storage;
+﻿using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Services;
+using NewsImpactRanker.WinForms.Storage;
+using NewsImpactRanker.WinForms.Utils;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Globalization;
+using System.Text;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
 
 namespace NewsImpactRanker.WinForms.Forms
 {
@@ -22,7 +23,7 @@ namespace NewsImpactRanker.WinForms.Forms
     {
         private const string TopicUrlColumnName = "colTopicUrl";
         private const string CopyScrapColumnName = "colCopyScrap";
-        private const string MainCaptionBase = "NewsImpactRanker - Classificador de Impacto de Notícias";
+        private const string MainCaptionBase = "NewsImpactRanker - Classificador de Impacto de NotÃ­cias";
 
 #if DEBUG
         private int _registroLimite = 10;
@@ -65,14 +66,14 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _tokensCurrentMinute = 0;
         private DateTime _minuteStartTime = DateTime.Now;
         private CancellationTokenSource _cancellationTokenSource;
-        private const int TPM_LIMIT = 5500; // Margem de segurança de 500 tokens abaixo dos 6000
+        private const int TPM_LIMIT = 5500; // Margem de seguranÃ§a de 500 tokens abaixo dos 6000
         private string _lastIaError = "Nenhum";
         private Stopwatch _executionTimer = new Stopwatch();
         private string _folderPath;
         private readonly Queue<long> _lastProcessingTimes = new Queue<long>();
         private readonly GeminiService _geminiService; // Adicione esta linha
 
-        // Configuração do Filtro Anti-Duplicidade
+        // ConfiguraÃ§Ã£o do Filtro Anti-Duplicidade
         private readonly int _summaryWordCount = 10;
         private int _duplicateCount = 0;
         private int _resumosCanonicosGerados = 0;
@@ -80,13 +81,16 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _avaliacoesCompletasEvitadas = 0;
         private int _avaliacoesCompletasExecutadas = 0;
 
-        // 👉 VARIÁVEIS DO FILTRO ANTI-DUPLICIDADE
+        // ðŸ‘‰ VARIÃVEIS DO FILTRO ANTI-DUPLICIDADE
         private List<SummaryCacheItem> _summaryCache = new List<SummaryCacheItem>();
 
         private sealed class SummaryDuplicateMatch
         {
             public string ExistingSummary { get; set; }
             public string NormalizedExistingSummary { get; set; }
+            public string ExistingUrl { get; set; }
+            public string ExistingProvider { get; set; }
+            public DateTime ExistingDate { get; set; }
             public string Reason { get; set; }
             public double Similarity { get; set; }
         }
@@ -97,7 +101,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _iaErrorCount = 0;
         private int _scrapErrorCount = 0;
         private int _cacheHitCount = 0;
-        // Cronômetro para saber até que horas o Groq deve ficar "de castigo"
+        // CronÃ´metro para saber atÃ© que horas o Groq deve ficar "de castigo"
         private DateTime _groqCooldownUntil = DateTime.MinValue;
 
         private int _groqSuccessCount = 0;
@@ -108,7 +112,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private string _lastResultsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_LastResults_v2.json");
         private string _cachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_EvaluatedCache_v2.json");
-        private string _summaryCachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NewsRanking_SummaryCache_v2.json");
+        private string _summaryCachePath => SummaryCacheManager.CacheFilePath;
 
         public MainForm()
         {
@@ -143,13 +147,13 @@ namespace NewsImpactRanker.WinForms.Forms
                                       ?? new Dictionary<string, NewsScoresItem>();
 
                     LogService.Info($"[CACHE] Entradas carregadas: {_evaluatedCache.Count}");
-                    LogService.Info($"[CACHE] Data de modificação: {File.GetLastWriteTime(_cachePath):o}");
+                    LogService.Info($"[CACHE] Data de modificaÃ§Ã£o: {File.GetLastWriteTime(_cachePath):o}");
                     LogService.Info($"[CACHE] Tamanho: {new FileInfo(_cachePath).Length} bytes");
                 }
                 else
                 {
                     _evaluatedCache = new Dictionary<string, NewsScoresItem>();
-                    LogService.Info("[CACHE] Arquivo não encontrado; iniciando cache vazio");
+                    LogService.Info("[CACHE] Arquivo nÃ£o encontrado; iniciando cache vazio");
                 }
             }
             catch (Exception ex)
@@ -186,10 +190,10 @@ namespace NewsImpactRanker.WinForms.Forms
             var executableInfo = File.Exists(executablePath) ? new FileInfo(executablePath) : null;
             var assembly = Assembly.GetExecutingAssembly();
 
-            LogService.Info($"[APP] Executável: {executablePath}");
+            LogService.Info($"[APP] ExecutÃ¡vel: {executablePath}");
             LogService.Info($"[APP] BaseDirectory: {AppDomain.CurrentDomain.BaseDirectory}");
             LogService.Info($"[APP] AssemblyLocation: {assembly.Location}");
-            LogService.Info($"[APP] Versão: {assembly.GetName().Version}");
+            LogService.Info($"[APP] VersÃ£o: {assembly.GetName().Version}");
             if (executableInfo != null)
                 LogService.Info($"[APP] Modificado em: {executableInfo.LastWriteTime:o}");
         }
@@ -232,7 +236,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 else if (sameHost && samePath && !string.Equals(requestedUri.Fragment, storedUri.Fragment, StringComparison.Ordinal))
                     reason = "fragmento";
                 else if (samePath && !sameHost)
-                    reason = "host/www/subdomínio";
+                    reason = "host/www/subdomÃ­nio";
                 else
                     reason = "caminho diferente";
 
@@ -256,12 +260,12 @@ namespace NewsImpactRanker.WinForms.Forms
             legacy = false;
             string normalizedUrl = NormalizeCacheUrl(url);
 
-            LogService.Info($"[CACHE] Diagnóstico lookup: original={url}");
-            LogService.Info($"[CACHE] Diagnóstico lookup: normalizada={normalizedUrl}");
+            LogService.Info($"[CACHE] DiagnÃ³stico lookup: original={url}");
+            LogService.Info($"[CACHE] DiagnÃ³stico lookup: normalizada={normalizedUrl}");
 
             if (IsClearlyContaminatedUrl(url) || string.IsNullOrWhiteSpace(normalizedUrl))
             {
-                LogService.Info($"[CACHE] URL inválida para lookup: {url}");
+                LogService.Info($"[CACHE] URL invÃ¡lida para lookup: {url}");
                 return false;
             }
 
@@ -275,8 +279,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 if (!IsValidEvaluatedCacheItem(pair.Value))
                 {
-                    LogService.Info("[CACHE] MISS diagnóstico");
-                    LogService.Info("[CACHE] Motivo: entrada encontrada, porém inválida ou incompleta");
+                    LogService.Info("[CACHE] MISS diagnÃ³stico");
+                    LogService.Info("[CACHE] Motivo: entrada encontrada, porÃ©m invÃ¡lida ou incompleta");
                     return false;
                 }
 
@@ -290,10 +294,10 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             var similar = FindSimilarCacheUrls(url).ToList();
-            LogService.Info("[CACHE] MISS diagnóstico");
+            LogService.Info("[CACHE] MISS diagnÃ³stico");
             LogService.Info($"[CACHE] URL original: {url}");
             LogService.Info($"[CACHE] URL normalizada para lookup: {normalizedUrl}");
-            LogService.Info($"[CACHE] Total de entradas em memória: {_evaluatedCache.Count}");
+            LogService.Info($"[CACHE] Total de entradas em memÃ³ria: {_evaluatedCache.Count}");
             LogService.Info(similar.Count == 0
                 ? "[CACHE] Motivo: nenhuma entrada com mesmo host/path"
                 : $"[CACHE] Motivo: existe entrada semelhante ({similar.Count})");
@@ -303,7 +307,7 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 LogService.Info($"[CACHE] Candidata {candidateNumber}: {candidate.StoredUrl}");
                 LogService.Info($"[CACHE] Candidata {candidateNumber} normalizada: {candidate.NormalizedStoredUrl}");
-                LogService.Info($"[CACHE] Diferença: {candidate.DifferenceReason}");
+                LogService.Info($"[CACHE] DiferenÃ§a: {candidate.DifferenceReason}");
                 candidateNumber++;
             }
             return false;
@@ -331,7 +335,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 _evaluatedCache[normalizedUrl] = item;
                 LogService.Info($"[CACHE] Entrada atualizada: {normalizedUrl}");
-                LogService.Info($"[CACHE] Entradas em memória: {_evaluatedCache.Count}");
+                LogService.Info($"[CACHE] Entradas em memÃ³ria: {_evaluatedCache.Count}");
                 SaveEvaluatedCache();
             }
         }
@@ -357,7 +361,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private async void btnStart_Click(object sender, EventArgs e)
         {
-            // Carrega configuração atualizada
+            // Carrega configuraÃ§Ã£o atualizada
             var config = StorageManager.LoadConfig();
             string startupMissingKeyMessage = GetMissingProviderKeyMessage(config);
             if (startupMissingKeyMessage != null)
@@ -386,19 +390,19 @@ namespace NewsImpactRanker.WinForms.Forms
 
             LogService.Info("=== Processamento iniciado ===");
 
-            // 1. Validação Inteligente de API Key conforme o provedor selecionado
+            // 1. ValidaÃ§Ã£o Inteligente de API Key conforme o provedor selecionado
             bool keyConfigurada = true;
 
             if (!keyConfigurada)
             {
                 string provedor = config.SelectedProvider.ToString();
                 MessageBox.Show(
-                    $"A chave API do {provedor} não foi configurada.",
+                    $"A chave API do {provedor} nÃ£o foi configurada.",
                     "Aviso",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
                 );
-                btnConfig_Click(null, null); // Abre a tela de configuração
+                btnConfig_Click(null, null); // Abre a tela de configuraÃ§Ã£o
                 return;
             }
 
@@ -407,7 +411,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
             try
             {
-                // 🔹 Carrega URLs da fonte (campo de texto ou arquivo)
+                // ðŸ”¹ Carrega URLs da fonte (campo de texto ou arquivo)
                 validUrls = LoadUrlsFromSource(config);
 
                 // Verifica se o campo de texto estava vazio para definir se estamos usando arquivo
@@ -419,7 +423,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 usingFile = !typedUrls.Any();
 
-                // 2. NOVA LÓGICA DE LIMITE: 0 = Infinito | n = Limite de registros
+                // 2. NOVA LÃ“GICA DE LIMITE: 0 = Infinito | n = Limite de registros
                 if (_registroLimite > 0)
                 {
                     validUrls = validUrls.Take(_registroLimite).ToList();
@@ -433,11 +437,11 @@ namespace NewsImpactRanker.WinForms.Forms
 
             if (validUrls.Count == 0)
             {
-                MessageBox.Show("Nenhuma URL válida encontrada para processar.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Nenhuma URL vÃ¡lida encontrada para processar.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // Configura o Dashboard e Logs de Início
+            // Configura o Dashboard e Logs de InÃ­cio
             _currentExecutionUsesFile = usingFile;
             string infoLimite = _registroLimite > 0 ? $"(Limite de {_registroLimite} registros ativo)" : "(Modo lote completo)";
             LogService.Info($"URLs carregadas: {validUrls.Count} {infoLimite}");
@@ -447,7 +451,7 @@ namespace NewsImpactRanker.WinForms.Forms
             else
                 LogService.Info("Modo: URLs digitadas manualmente no campo de texto.");
 
-            // Limpa estados de execuções anteriores
+            // Limpa estados de execuÃ§Ãµes anteriores
             _allNewsScores.Clear();
             lock (_failedDomainsLock) { _failedDomains.Clear(); }
 
@@ -462,9 +466,9 @@ namespace NewsImpactRanker.WinForms.Forms
 
             // --- Por isto: ---
             if (dgvResults.DataSource != null) dgvResults.DataSource = null;
-            else dgvResults.Rows.Clear(); // Se não estiver vinculada, limpa normal
+            else dgvResults.Rows.Clear(); // Se nÃ£o estiver vinculada, limpa normal
 
-            dgvTopicResults.DataSource = null; // Como usamos DataSource aqui, isso já limpa tudo
+            dgvTopicResults.DataSource = null; // Como usamos DataSource aqui, isso jÃ¡ limpa tudo
             dgvTopicResults.Columns.Clear();   // Opcional: Limpa as colunas para garantir o novo layout
 
             // Configura Barra de Progresso
@@ -476,18 +480,18 @@ namespace NewsImpactRanker.WinForms.Forms
 
             try
             {
-                // 🔹 INÍCIO DO PROCESSAMENTO
-                // Agora o ProcessUrlsAsync cuidará internamente de alternar entre Gemini/Groq
+                // ðŸ”¹ INÃCIO DO PROCESSAMENTO
+                // Agora o ProcessUrlsAsync cuidarÃ¡ internamente de alternar entre Gemini/Groq
                 await ProcessUrlsAsync(validUrls);
 
-                // 🔹 FINALIZAÇÃO E RELATÓRIOS
-                LogService.Info($"Processamento concluído. Sucessos: {_allNewsScores.Count}");
+                // ðŸ”¹ FINALIZAÃ‡ÃƒO E RELATÃ“RIOS
+                LogService.Info($"Processamento concluÃ­do. Sucessos: {_allNewsScores.Count}");
 
-                // Seleciona as melhores notícias por tópico (Ranking Final)
+                // Seleciona as melhores notÃ­cias por tÃ³pico (Ranking Final)
                 var topicResults = SelectBestNewsPerTopic(9);
 
-                // ---> INTEGRAÇÃO COM LAST RESULTS (JSON) <---
-                // 1. Atualiza a variável de memória global para o controle de cliques
+                // ---> INTEGRAÃ‡ÃƒO COM LAST RESULTS (JSON) <---
+                // 1. Atualiza a variÃ¡vel de memÃ³ria global para o controle de cliques
                 MergePendingTopicResults(topicResults);
 
                 // 3. Atualiza a grid de resultados por assunto
@@ -496,13 +500,13 @@ namespace NewsImpactRanker.WinForms.Forms
                 // 4. Salva o arquivo de texto com o ranking
                 SaveFinalRankingToFile(topicResults);
 
-                LogService.Info($"Total de tópicos preenchidos: {topicResults.Count}");
+                LogService.Info($"Total de tÃ³picos preenchidos: {topicResults.Count}");
                 UpdateCostLabel();
             }
             catch (OperationCanceledException)
             {
-                LogService.Info("Operação interrompida pelo usuário.");
-                MessageBox.Show("Processamento cancelado.", "Informação", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                LogService.Info("OperaÃ§Ã£o interrompida pelo usuÃ¡rio.");
+                MessageBox.Show("Processamento cancelado.", "InformaÃ§Ã£o", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -542,12 +546,12 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 try
                 {
-                    // O segredo do Fallback está aqui dentro
+                    // O segredo do Fallback estÃ¡ aqui dentro
                     await ProcessSingleUrlAsync(url);
                 }
                 catch (Exception ex)
                 {
-                    LogService.Error($"Erro crítico ao processar {url}: {ex.Message}");
+                    LogService.Error($"Erro crÃ­tico ao processar {url}: {ex.Message}");
                     _lastIaError = ex.Message;
                 }
                 finally
@@ -618,13 +622,13 @@ namespace NewsImpactRanker.WinForms.Forms
 
             var config = StorageManager.LoadConfig();
 
-            LogService.Info("[DEDUP] Gerando resumo canônico antes da avaliação");
-            LogService.Info("[DEDUP] Idioma canônico: português");
+            LogService.Info("[DEDUP] Gerando resumo canÃ´nico antes da avaliaÃ§Ã£o");
+            LogService.Info("[DEDUP] Idioma canÃ´nico: portuguÃªs");
             LogService.Info($"[DEDUP] Palavras configuradas: {config.SummaryWordCount}");
             var canonicalResult = await _canonicalSummaryService.GenerateAsync(newsItem.RawText, config);
             if (!canonicalResult.Success || string.IsNullOrWhiteSpace(canonicalResult.Data))
             {
-                LogService.Error($"[DEDUP] Falha ao gerar resumo canônico: {canonicalResult.ErrorMessage}");
+                LogService.Error($"[DEDUP] Falha ao gerar resumo canÃ´nico: {canonicalResult.ErrorMessage}");
                 _iaErrorCount++;
                 return;
             }
@@ -639,7 +643,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
             if (receivedWords != config.SummaryWordCount)
             {
-                LogService.Error($"[DEDUP] Resumo canônico inválido: esperado {config.SummaryWordCount} palavras, recebido {receivedWords}");
+                LogService.Error($"[DEDUP] Resumo canÃ´nico invÃ¡lido: esperado {config.SummaryWordCount} palavras, recebido {receivedWords}");
                 _iaErrorCount++;
                 return;
             }
@@ -649,27 +653,27 @@ namespace NewsImpactRanker.WinForms.Forms
                 _duplicateCount++;
                 _duplicatasPorResumo++;
                 _avaliacoesCompletasEvitadas++;
-                LogService.Info("[DEDUP] DUPLICATA PRÉ-AVALIAÇÃO");
+                LogService.Info("[DEDUP] DUPLICATA PRÃ‰-AVALIAÃ‡ÃƒO");
                 LogService.Info($"[DEDUP] Resumo atual: {canonicalSummary}");
                 LogService.Info($"[DEDUP] Resumo existente: {duplicateMatch.ExistingSummary}");
                 LogService.Info($"[DEDUP] Similaridade: {duplicateMatch.Similarity:0.00} ({duplicateMatch.Reason})");
-                LogService.Info("[DEDUP] Avaliação completa evitada");
+                LogService.Info("[DEDUP] AvaliaÃ§Ã£o completa evitada");
                 return;
             }
 
-            LogService.Info("[DEDUP] Resumo não encontrado no histórico");
+            LogService.Info("[DEDUP] Resumo nÃ£o encontrado no histÃ³rico");
 
             string prompt = LoadPrompt(config);
             var provider = GetSelectedProviderService(config.SelectedProvider);
-            LogService.Info("[AI] Iniciando avaliação completa");
+            LogService.Info("[AI] Iniciando avaliaÃ§Ã£o completa");
             LogService.Info($"[{provider.Name}] Processando URL: {url}");
             var aiResult = await provider.ClassifyAsync(newsItem.RawText, prompt);
             UpdateCostLabel();
 
-            // Verifica se o usuário cancelou durante o aviso de IP
+            // Verifica se o usuÃ¡rio cancelou durante o aviso de IP
             if (_cts != null && _cts.IsCancellationRequested) return;
 
-            // 3. FINALIZAÇÃO
+            // 3. FINALIZAÃ‡ÃƒO
             if (aiResult.Success && aiResult.Data != null)
             {
                 var resultScore = new NewsScoresItem
@@ -690,14 +694,14 @@ namespace NewsImpactRanker.WinForms.Forms
                 _avaliacoesCompletasExecutadas++;
                 IncrementProviderCounter(provider.Name);
                 UpsertEvaluatedCache(normalizedUrl, resultScore);
-                SaveCanonicalSummary(canonicalSummary);
+                SaveCanonicalSummary(canonicalSummary, url, config.SelectedProvider.ToString(), config.SummaryWordCount);
             }
             else
             {
                 if (string.Equals(provider.Name, "KIMI", StringComparison.OrdinalIgnoreCase))
                     LogService.Error($"[KIMI] Erro final: {aiResult.ErrorMessage}");
 
-                LogService.Error($"❌ Falha definitiva: Nenhuma IA processou {url}");
+                LogService.Error($"âŒ Falha definitiva: Nenhuma IA processou {url}");
                 _iaErrorCount++;
             }
         }
@@ -706,7 +710,7 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             if (string.IsNullOrWhiteSpace(config.PromptFilePath) || !File.Exists(config.PromptFilePath))
             {
-                throw new FileNotFoundException("Arquivo de prompt não encontrado.", config.PromptFilePath);
+                throw new FileNotFoundException("Arquivo de prompt nÃ£o encontrado.", config.PromptFilePath);
             }
 
             return File.ReadAllText(config.PromptFilePath);
@@ -716,46 +720,54 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             match = null;
             string normalized = NormalizeCanonicalSummary(generatedSummary);
-            int expectedWords = StorageManager.LoadConfig().SummaryWordCount > 0
-                ? StorageManager.LoadConfig().SummaryWordCount
-                : 5;
+            var historical = _summaryCache
+                .Where(x => x != null && x.IsCanonical && !string.IsNullOrWhiteSpace(x.Summary))
+                .ToList();
 
-            if (CountWords(normalized) != expectedWords)
+            LogService.Info("[DEDUP] Iniciando comparação histórica");
+            LogService.Info($"[DEDUP] Resumo original: {generatedSummary}");
+            LogService.Info($"[DEDUP] Resumo normalizado: {normalized}");
+            LogService.Info($"[DEDUP] Tokens: {string.Join(", ", normalized.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))}");
+            LogService.Info($"[DEDUP] Histórico elegível: {historical.Count}");
+            LogService.Info($"[DEDUP] Comparações executadas: {historical.Count}");
+
+            var candidates = historical.Select(item =>
             {
-                LogService.Warn($"[DEDUP] Resumo inválido: esperado {expectedWords} palavras, recebido {CountWords(normalized)}");
-                return false;
+                string existing = NormalizeCanonicalSummary(item.Summary);
+                double similarity = CalculateCanonicalTokenSimilarity(normalized, existing);
+                return new { Item = item, Normalized = existing, Similarity = similarity };
+            }).OrderByDescending(x => x.Similarity).Take(5).ToList();
+
+            int candidateNumber = 1;
+            foreach (var candidate in candidates)
+            {
+                int shared = SharedTokenCount(normalized, candidate.Normalized);
+                LogService.Info($"[DEDUP] Candidata histórica {candidateNumber++}: resumo={candidate.Item.Summary}; URL={candidate.Item.Url ?? "(não registrada)"}; data={candidate.Item.DateAdded:o}; provider={candidate.Item.Provider ?? "(não registrado)"}; IsCanonical={candidate.Item.IsCanonical}; similaridade={candidate.Similarity:0.00}; tokens compartilhados={shared}");
             }
 
-            LogService.Info("[DEDUP] Comparando exclusivamente pelo resumo");
-            foreach (var item in _summaryCache.Where(x => x.IsCanonical && !string.IsNullOrWhiteSpace(x.Summary)))
+            foreach (var candidate in candidates)
             {
-                string existingNormalized = NormalizeCanonicalSummary(item.Summary);
-                if (string.Equals(normalized, existingNormalized, StringComparison.Ordinal))
-                {
-                    match = new SummaryDuplicateMatch
-                    {
-                        ExistingSummary = item.Summary,
-                        NormalizedExistingSummary = existingNormalized,
-                        Reason = "igualdade exata do resumo normalizado",
-                        Similarity = 1.0
-                    };
-                    return true;
-                }
+                int shared = SharedTokenCount(normalized, candidate.Normalized);
+                bool exact = string.Equals(normalized, candidate.Normalized, StringComparison.Ordinal);
+                bool conservativeMatch = shared >= 3 && candidate.Similarity >= 0.40;
+                if (!exact && !conservativeMatch) continue;
 
-                double similarity = CalculateCanonicalTokenSimilarity(normalized, existingNormalized);
-                if (similarity >= 0.80 && CountWords(normalized) == CountWords(existingNormalized))
+                match = new SummaryDuplicateMatch
                 {
-                    match = new SummaryDuplicateMatch
-                    {
-                        ExistingSummary = item.Summary,
-                        NormalizedExistingSummary = existingNormalized,
-                        Reason = "tokens canônicos semelhantes",
-                        Similarity = similarity
-                    };
-                    return true;
-                }
+                    ExistingSummary = candidate.Item.Summary,
+                    NormalizedExistingSummary = candidate.Normalized,
+                    ExistingUrl = candidate.Item.Url,
+                    ExistingProvider = candidate.Item.Provider,
+                    ExistingDate = candidate.Item.DateAdded,
+                    Reason = exact ? "igualdade exata do resumo normalizado" : $"equivalência lexical controlada ({shared} tokens compartilhados)",
+                    Similarity = exact ? 1.0 : candidate.Similarity
+                };
+                return true;
             }
 
+            double best = candidates.Count == 0 ? 0 : candidates[0].Similarity;
+            LogService.Info("[DEDUP] NÃO DETECTADA COMO DUPLICATA");
+            LogService.Info($"[DEDUP] Maior similaridade encontrada: {best:0.00}; limiar: 0.40 com mínimo de 3 tokens compartilhados");
             return false;
         }
 
@@ -763,19 +775,42 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             if (string.IsNullOrWhiteSpace(summary)) return string.Empty;
 
-            var chars = summary.ToLowerInvariant()
-                .Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))
+            string decomposed = summary.ToLowerInvariant().Normalize(NormalizationForm.FormD);
+            var chars = decomposed
+                .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+                .Select(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c) ? c : ' ')
                 .ToArray();
+
             return string.Join(" ", new string(chars)
                 .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(NormalizeCanonicalToken));
+                .Select(NormalizeCanonicalToken)
+                .Select(CanonicalEquivalent));
         }
 
         private static string NormalizeCanonicalToken(string token)
         {
             if (token.Length > 4 && token.EndsWith("s", StringComparison.Ordinal))
-                return token.Substring(0, token.Length - 1);
-            return token;
+                token = token.Substring(0, token.Length - 1);
+
+            return CanonicalEquivalent(token);
+        }
+
+        private static string CanonicalEquivalent(string token)
+        {
+            switch (token)
+            {
+                case "reaproveitavel": return "reutilizavel";
+                case "chines": return "china";
+                case "pouso":
+                case "pousar":
+                case "pousou": return "pousar";
+                case "envelhecimento":
+                case "envelhece":
+                case "envelhecer": return "envelhecer";
+                case "cerebral":
+                case "cerebro": return "cerebro";
+                default: return token;
+            }
         }
 
         private static int CountWords(string value)
@@ -793,18 +828,37 @@ namespace NewsImpactRanker.WinForms.Forms
             int union = leftTokens.Union(rightTokens).Count();
             return union == 0 ? 0 : (double)intersection / union;
         }
+        private static int SharedTokenCount(string left, string right)
+        {
+            var leftTokens = new HashSet<string>(left.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
+            var rightTokens = new HashSet<string>(right.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
+            return leftTokens.Intersect(rightTokens).Count();
+        }
 
-        private void SaveCanonicalSummary(string canonicalSummary)
+        private void SaveCanonicalSummary(string canonicalSummary, string url, string provider, int wordCount)
         {
             if (string.IsNullOrWhiteSpace(canonicalSummary)) return;
+
+            string normalized = NormalizeCanonicalSummary(canonicalSummary);
+            var existing = _summaryCache.FirstOrDefault(x =>
+                x != null && x.IsCanonical &&
+                string.Equals(NormalizeCanonicalSummary(x.Summary), normalized, StringComparison.Ordinal));
+
+            if (existing != null) return;
 
             _summaryCache.Add(new SummaryCacheItem
             {
                 Summary = canonicalSummary.Trim(),
+                NormalizedSummary = normalized,
+                Url = url,
+                Provider = provider,
+                WordCount = wordCount,
                 DateAdded = DateTime.Now,
                 IsCanonical = true
             });
             SummaryCacheManager.SaveCache(_summaryCache);
+            LogService.Info("[DEDUP] IsCanonical: true");
+            LogService.Info($"[DEDUP] Chave normalizada: {normalized}");
         }
 
         private void IncrementProviderCounter(string providerName)
@@ -872,7 +926,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // Checa bloqueio de IP no Gemini (se ele for o principal)
             if (!result.Success && primaryProvider == AiProvider.Gemini && IsIpBlockError(result.ErrorMessage))
             {
-                // Se o usuário decidir encerrar na caixa de diálogo, retornamos falha imediatamente
+                // Se o usuÃ¡rio decidir encerrar na caixa de diÃ¡logo, retornamos falha imediatamente
                 if (!HandleIpBlockWarning()) return (false, null, primaryProvider);
             }
 
@@ -883,30 +937,30 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             // --- TENTATIVA 2: Fallback (Reserva) ---
-            // Se o principal era Gemini, reserva é Groq (e vice-versa)
+            // Se o principal era Gemini, reserva Ã© Groq (e vice-versa)
             var fallbackProvider = (primaryProvider == AiProvider.Gemini) ? AiProvider.Groq : AiProvider.Gemini;
 
-            LogService.Warn($"⚠️ {primaryProvider} falhou para {url}. Acionando reserva {fallbackProvider}...");
+            LogService.Warn($"âš ï¸ {primaryProvider} falhou para {url}. Acionando reserva {fallbackProvider}...");
 
             var fallbackResult = await CallAiProviderAsync(fallbackProvider, rawText, url);
 
-            // Checa bloqueio de IP também no fallback (caso o reserva seja o Gemini)
+            // Checa bloqueio de IP tambÃ©m no fallback (caso o reserva seja o Gemini)
             if (!fallbackResult.Success && fallbackProvider == AiProvider.Gemini && IsIpBlockError(fallbackResult.ErrorMessage))
             {
                 if (!HandleIpBlockWarning()) return (false, null, fallbackProvider);
             }
 
-            // Verificação de sucesso do reserva
+            // VerificaÃ§Ã£o de sucesso do reserva
             if (fallbackResult.Success && fallbackResult.Data != null)
             {
-                LogService.Info($"✅ Fallback bem-sucedido! {fallbackProvider} processou {url}.");
+                LogService.Info($"âœ… Fallback bem-sucedido! {fallbackProvider} processou {url}.");
                 return (true, fallbackResult.Data, fallbackProvider);
             }
             else
             {
-                // 🚨 CRÍTICO: Registra o motivo real da falha da segunda IA no log 🚨
-                // Sem essa linha, não saberíamos se a Groq falhou por API Key, Limite de Uso ou Erro de JSON
-                LogService.Error($"🚨 O Reserva ({fallbackProvider}) também falhou para {url}: {fallbackResult.ErrorMessage}");
+                // ðŸš¨ CRÃTICO: Registra o motivo real da falha da segunda IA no log ðŸš¨
+                // Sem essa linha, nÃ£o saberÃ­amos se a Groq falhou por API Key, Limite de Uso ou Erro de JSON
+                LogService.Error($"ðŸš¨ O Reserva ({fallbackProvider}) tambÃ©m falhou para {url}: {fallbackResult.ErrorMessage}");
             }
 
             // Se as duas falharem, retornamos o pacote informando a falha definitiva
@@ -928,9 +982,9 @@ namespace NewsImpactRanker.WinForms.Forms
             bool continuar = false;
             this.Invoke((MethodInvoker)delegate {
                 var dr = MessageBox.Show(
-                    "O Google detectou tráfego automatizado e bloqueou seu IP temporariamente.\n\n" +
+                    "O Google detectou trÃ¡fego automatizado e bloqueou seu IP temporariamente.\n\n" +
                     "Recomendamos reiniciar seu modem para obter um novo IP.\n\n" +
-                    "Deseja CONTINUAR tentando processar as notícias restantes (usando a Groq se o Gemini falhar)?",
+                    "Deseja CONTINUAR tentando processar as notÃ­cias restantes (usando a Groq se o Gemini falhar)?",
                     "IP Bloqueado pelo Gemini",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning);
@@ -941,7 +995,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
             if (!continuar)
             {
-                LogService.Warn("🛑 Processamento cancelado pelo usuário após bloqueio de IP.");
+                LogService.Warn("ðŸ›‘ Processamento cancelado pelo usuÃ¡rio apÃ³s bloqueio de IP.");
                 _cts?.Cancel();
             }
             return continuar;
@@ -970,13 +1024,13 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
                 else
                 {
-                    // O Groq já retorna ServiceResult direto, então aqui não dá erro
+                    // O Groq jÃ¡ retorna ServiceResult direto, entÃ£o aqui nÃ£o dÃ¡ erro
                     return await _groqService.ClassifyNewsAsync(text);
                 }
             }
             catch (Exception ex)
             {
-                return ServiceResult<TopicScoresResponse>.Fail($"Exceção na IA ({provider}): {ex.Message}");
+                return ServiceResult<TopicScoresResponse>.Fail($"ExceÃ§Ã£o na IA ({provider}): {ex.Message}");
             }
         }
 
@@ -988,14 +1042,14 @@ namespace NewsImpactRanker.WinForms.Forms
             dynamic iaData = null;
             string errorMsg = "";
 
-            // 1. Decisão inicial de qual provedor usar (considerando o Cooldown do Groq)
+            // 1. DecisÃ£o inicial de qual provedor usar (considerando o Cooldown do Groq)
             bool useGemini = config.SelectedProvider == AiProvider.Gemini;
 
             if (config.SelectedProvider == AiProvider.Groq)
             {
                 if (DateTime.Now < _groqCooldownUntil)
                 {
-                    LogService.Warn($"[⏳ COOLDOWN] Groq em descanso até {_groqCooldownUntil:HH:mm:ss}. Usando Gemini para {url}");
+                    LogService.Warn($"[â³ COOLDOWN] Groq em descanso atÃ© {_groqCooldownUntil:HH:mm:ss}. Usando Gemini para {url}");
                     useGemini = true;
                 }
             }
@@ -1016,9 +1070,9 @@ namespace NewsImpactRanker.WinForms.Forms
             if (!success && !useGemini && errorMsg != null &&
                (errorMsg.Contains("429") || errorMsg.Contains("Limite") || errorMsg.ToLower().Contains("too many requests")))
             {
-                LogService.Error($"[GROQ LIMIT] Groq sobrecarregado! Acionando Gemini de emergência...");
+                LogService.Error($"[GROQ LIMIT] Groq sobrecarregado! Acionando Gemini de emergÃªncia...");
 
-                // Põe o Groq de castigo
+                // PÃµe o Groq de castigo
                 _groqCooldownUntil = DateTime.Now.AddSeconds(40);
 
                 // Tenta novamente agora com o Gemini
@@ -1027,7 +1081,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 iaData = fallbackRes.Data;
                 errorMsg = fallbackRes.ErrorMessage;
 
-                // 👉 IMPORTANTE: Atualiza a flag para que os logs e contadores abaixo saibam que foi o Gemini quem resolveu
+                // ðŸ‘‰ IMPORTANTE: Atualiza a flag para que os logs e contadores abaixo saibam que foi o Gemini quem resolveu
                 useGemini = true;
             }
 
@@ -1039,7 +1093,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 try
                 {
-                    // Normalização: Transforma qualquer retorno em JSON universal para evitar crash de maiúsculas/minúsculas
+                    // NormalizaÃ§Ã£o: Transforma qualquer retorno em JSON universal para evitar crash de maiÃºsculas/minÃºsculas
                     string jsonUnificado = iaData is string ? (string)iaData : Newtonsoft.Json.JsonConvert.SerializeObject(iaData);
                     var parsedData = Newtonsoft.Json.Linq.JObject.Parse(jsonUnificado);
 
@@ -1070,14 +1124,14 @@ namespace NewsImpactRanker.WinForms.Forms
 
                     if (isDuplicate)
                     {
-                        LogService.Info($"[♻️ DEDUPLICAÇÃO] Notícia repetida ignorada por resumo: '{summary}'");
+                        LogService.Info($"[â™»ï¸ DEDUPLICAÃ‡ÃƒO] NotÃ­cia repetida ignorada por resumo: '{summary}'");
                         _duplicateCount++;
                         if (_currentExecutionUsesFile) RemoveUrlFromConfiguredFile(url);
                         return;
                     }
                 }
 
-                // 6. Finalização e Contabilização
+                // 6. FinalizaÃ§Ã£o e ContabilizaÃ§Ã£o
                 // Definimos o nome correto para o log baseado em quem terminou a tarefa
                 string provedorFinal = useGemini ? "Gemini" : "Groq";
                 LogService.Info($"IA utilizada: {provedorFinal}");
@@ -1088,20 +1142,20 @@ namespace NewsImpactRanker.WinForms.Forms
             }
             else
             {
-                // Se após todas as tentativas falhou
+                // Se apÃ³s todas as tentativas falhou
                 _lastIaError = errorMsg ?? "Resposta vazia ou erro desconhecido";
                 LogService.Warn($"IA falhou definitivamente para {url}: {_lastIaError}");
                 _iaErrorCount++;
             }
         }
         /// <summary>
-        /// Processa o sucesso de uma classificação, seja vinda da IA ou do Cache.
+        /// Processa o sucesso de uma classificaÃ§Ã£o, seja vinda da IA ou do Cache.
         /// </summary>
         private void HandleClassificationSuccess(string url, string title, Dictionary<string, int> scores, string summary, string rawText, bool fromCache = false, string providerName = "IA")
         {
             NewsScoresItem item;
 
-            // 1. Registro na lista global de pontuações
+            // 1. Registro na lista global de pontuaÃ§Ãµes
             lock (_scoresLock)
             {
                 item = new NewsScoresItem
@@ -1122,7 +1176,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
                 else
                 {
-                    // Atualiza caso já exista (útil para recarregar do cache com novos dados)
+                    // Atualiza caso jÃ¡ exista (Ãºtil para recarregar do cache com novos dados)
                     var existing = _allNewsScores.First(n => n.Url == url);
                     existing.Scores = scores;
                     existing.Summary = summary;
@@ -1131,7 +1185,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // 2. Persistência no Cache de IA
+            // 2. PersistÃªncia no Cache de IA
             if (!fromCache)
             {
                 UpsertEvaluatedCache(url, item);
@@ -1139,8 +1193,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
             UpdateStatusLabel();
 
-            // 3. RECONSTRUÇÃO DO RANKING (Lógica Multi-Categoria)
-            // Aqui garantimos que a notícia se espalhe por todos os tópicos que pontuou
+            // 3. RECONSTRUÃ‡ÃƒO DO RANKING (LÃ³gica Multi-Categoria)
+            // Aqui garantimos que a notÃ­cia se espalhe por todos os tÃ³picos que pontuou
             List<TopicResult> partialResults = new List<TopicResult>();
 
             foreach (var news in _allNewsScores)
@@ -1161,13 +1215,13 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // Ordenação: Alfabética por Tópico e depois maior Score no topo
+            // OrdenaÃ§Ã£o: AlfabÃ©tica por TÃ³pico e depois maior Score no topo
             partialResults = partialResults
                 .OrderBy(r => r.Topic)
                 .ThenByDescending(r => r.Score)
                 .ToList();
 
-            // 4. Preservação do estado de "Lido" (IsClicked)
+            // 4. PreservaÃ§Ã£o do estado de "Lido" (IsClicked)
             foreach (var novoResultado in partialResults)
             {
                 var antigo = _currentTopicResults.FirstOrDefault(r => r.Url == novoResultado.Url && r.Topic == novoResultado.Topic);
@@ -1181,13 +1235,13 @@ namespace NewsImpactRanker.WinForms.Forms
             _currentTopicResults = partialResults;
             SaveLastResults();
 
-            // 6. Atualiza a Grid (apenas o que não foi lido)
+            // 6. Atualiza a Grid (apenas o que nÃ£o foi lido)
             var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked).ToList();
             DisplayTopicResults(itensParaMostrar);
 
             if (!fromCache)
             {
-                LogService.Info($"[OK] ({providerName}) Notícia classificada e distribuída: {url}");
+                LogService.Info($"[OK] ({providerName}) NotÃ­cia classificada e distribuÃ­da: {url}");
 
                 // Se estiver processando lote de arquivo, limpa a linha do TXT
                 if (_currentExecutionUsesFile)
@@ -1219,11 +1273,11 @@ namespace NewsImpactRanker.WinForms.Forms
                 var fileInfo = new FileInfo(_cachePath);
                 LogService.Info("[CACHE] Arquivo salvo com sucesso");
                 LogService.Info($"[CACHE] Tamanho final: {fileInfo.Length} bytes");
-                LogService.Info($"[CACHE] Data de modificação: {fileInfo.LastWriteTime:o}");
+                LogService.Info($"[CACHE] Data de modificaÃ§Ã£o: {fileInfo.LastWriteTime:o}");
             }
             catch (Exception ex)
             {
-                LogService.Error("[CACHE] Erro ao salvar memória de avaliações.", ex);
+                LogService.Error("[CACHE] Erro ao salvar memÃ³ria de avaliaÃ§Ãµes.", ex);
             }
         }
 
@@ -1234,8 +1288,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 this.Invoke(new Action(UpdateStatusLabel));
                 return;
             }
-            // Dashboard simplificado para o rodapé (lblInfo)
-            lblInfo.Text = $"✅ Sucesso: {_successCount} | ♻️ Duplicadas: {_duplicateCount} | ⚡ Cache: {_cacheHitCount} | 🤖 Erros IA: {_iaErrorCount}";
+            // Dashboard simplificado para o rodapÃ© (lblInfo)
+            lblInfo.Text = $"âœ… Sucesso: {_successCount} | â™»ï¸ Duplicadas: {_duplicateCount} | âš¡ Cache: {_cacheHitCount} | ðŸ¤– Erros IA: {_iaErrorCount}";
         }
 
         // 
@@ -1249,7 +1303,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 var lines = new List<string>();
 
-                // 1. Constrói cada seção do relatório
+                // 1. ConstrÃ³i cada seÃ§Ã£o do relatÃ³rio
                 AddReportHeader(lines);
                 AddMonitoredTopicsSection(lines);
                 AddRankingSection(lines, results);
@@ -1260,16 +1314,16 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 // 2. Salva o arquivo final
                 File.WriteAllLines(_lastReportPath, lines);
-                LogService.Info($"Relatório completo salvo em: {_lastReportPath}");
+                LogService.Info($"RelatÃ³rio completo salvo em: {_lastReportPath}");
             }
             catch (Exception ex)
             {
-                LogService.Error("Erro ao gerar relatório final", ex);
+                LogService.Error("Erro ao gerar relatÃ³rio final", ex);
             }
         }
 
         // ==============================================
-        // SUB-MÉTODOS DE GERAÇÃO DO RELATÓRIO
+        // SUB-MÃ‰TODOS DE GERAÃ‡ÃƒO DO RELATÃ“RIO
         // ==============================================
 
         private void AddReportHeader(List<string> lines)
@@ -1284,19 +1338,19 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void AddMonitoredTopicsSection(List<string> lines)
         {
-            lines.Add("===== TÓPICOS MONITORADOS =====");
+            lines.Add("===== TÃ“PICOS MONITORADOS =====");
             if (_allNewsScores.Any())
             {
                 var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
                 foreach (var topicName in allTopics)
                 {
                     int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
-                    lines.Add($"- {topicName.PadRight(30)} ({count} notícias encontradas)");
+                    lines.Add($"- {topicName.PadRight(30)} ({count} notÃ­cias encontradas)");
                 }
             }
             else
             {
-                lines.Add("Nenhum tópico processado.");
+                lines.Add("Nenhum tÃ³pico processado.");
             }
             lines.Add("");
         }
@@ -1308,16 +1362,19 @@ namespace NewsImpactRanker.WinForms.Forms
 
             if (results.Count == 0)
             {
-                lines.Add("Nenhuma notícia atingiu os critérios mínimos para o ranking.");
+                lines.Add("Nenhuma notÃ­cia atingiu os critÃ©rios mÃ­nimos para o ranking.");
             }
             else
             {
                 foreach (var r in results)
                 {
-                    lines.Add($"📌 TÓPICO: {r.Topic.ToUpper()}");
-                    lines.Add($"⭐ SCORE : {r.Score}");
-                    lines.Add($"🔗 URL   : {r.Url}");
-                    lines.Add($"📄 TÍTULO: {r.Title}");
+                    lines.Add($"ðŸ“Œ TÃ“PICO: {r.Topic.ToUpper()}");
+                    lines.Add($"â­ SCORE : {r.Score}");
+                    lines.Add($"ðŸŽ¯ IDEAL : {r.IdealScore}");
+                    lines.Add($"ðŸ“ DIFERENÃ‡A: {r.Score - r.IdealScore}");
+                    lines.Add($"ðŸ“Š SITUAÃ‡ÃƒO: {r.ScoreStatus}");
+                    lines.Add($"ðŸ”— URL   : {r.Url}");
+                    lines.Add($"ðŸ“„ TÃTULO: {r.Title}");
                     lines.Add(new string('-', 40));
                 }
             }
@@ -1326,22 +1383,22 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void AddExecutionSummarySection(List<string> lines)
         {
-            lines.Add("===== RESUMO DA EXECUÇÃO =====");
+            lines.Add("===== RESUMO DA EXECUÃ‡ÃƒO =====");
             lines.Add($"Total de URLs Processadas       : {progressBar.Value}");
-            lines.Add($"Sucessos de Ranking (Inéditas)  : {_successCount - _cacheHitCount}");
-            lines.Add($"Reaproveitadas via Cache (⚡)   : {_cacheHitCount}");
-            lines.Add($"Descartadas por Duplicidade (♻️) : {_duplicateCount}");
-            lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
-            lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
+            lines.Add($"Sucessos de Ranking (InÃ©ditas)  : {_successCount - _cacheHitCount}");
+            lines.Add($"Reaproveitadas via Cache (âš¡)   : {_cacheHitCount}");
+            lines.Add($"Descartadas por Duplicidade (â™»ï¸) : {_duplicateCount}");
+            lines.Add($"Falhas de IA (ðŸ¤–)               : {_iaErrorCount}");
+            lines.Add($"Falhas de Scraping (ðŸŒ)         : {_scrapErrorCount}");
             lines.Add($"- Processados pelo DeepSeek     : {_deepSeekSuccessCount}");
             lines.Add($"- Processados pelo Groq         : {_groqSuccessCount}");
             lines.Add($"- Processados pelo Gemini       : {_geminiSuccessCount}");
             lines.Add($"- Processados pelo Mistral      : {_mistralSuccessCount}");
-            lines.Add($"Resumos canônicos gerados       : {_resumosCanonicosGerados}");
+            lines.Add($"Resumos canÃ´nicos gerados       : {_resumosCanonicosGerados}");
             lines.Add($"Duplicatas detectadas           : {_duplicatasPorResumo}");
-            lines.Add($"Avaliações completas evitadas   : {_avaliacoesCompletasEvitadas}");
-            lines.Add($"Avaliações completas executadas : {_avaliacoesCompletasExecutadas}");
-            lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
+            lines.Add($"AvaliaÃ§Ãµes completas evitadas   : {_avaliacoesCompletasEvitadas}");
+            lines.Add($"AvaliaÃ§Ãµes completas executadas : {_avaliacoesCompletasExecutadas}");
+            lines.Add($"Tempo Total de ExecuÃ§Ã£o         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
             lines.Add("");
         }
 
@@ -1351,7 +1408,7 @@ namespace NewsImpactRanker.WinForms.Forms
             lines.Add("RESUMO DE CUSTOS DE IA:");
             lines.Add($"- Gemini: prompt={CostManager.GetGeminiPromptTokens()}, completion={CostManager.GetGeminiCompletionTokens()}, total={CostManager.GetGeminiTokens()} tokens (Custo: ${CostManager.GetGeminiCost():0.000000})");
             lines.Add($"- Groq: prompt={CostManager.GetGroqPromptTokens()}, completion={CostManager.GetGroqCompletionTokens()}, total={CostManager.GetGroqTokens()} tokens (Custo: ${CostManager.GetGroqCost():0.000000})");
-            lines.Add($"- CUSTO TOTAL DA OPERAÇÃO: ${(CostManager.GetGeminiCost() + CostManager.GetGroqCost()):0.000000}");
+            lines.Add($"- CUSTO TOTAL DA OPERAÃ‡ÃƒO: ${(CostManager.GetGeminiCost() + CostManager.GetGroqCost()):0.000000}");
             lines.Add("--------------------------------------------------");
             lines.Add("");
         }
@@ -1362,10 +1419,10 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 if (_failedDomains.Any())
                 {
-                    lines.Add("===== DOMÍNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
+                    lines.Add("===== DOMÃNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
                     foreach (var d in _failedDomains.Distinct())
                     {
-                        lines.Add($"❌ {d}");
+                        lines.Add($"âŒ {d}");
                     }
                     lines.Add("");
                 }
@@ -1375,7 +1432,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private void AddFailuresSection(List<string> lines)
         {
             lines.Add("=======================================================");
-            lines.Add("📋 NOTÍCIAS NÃO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
+            lines.Add("ðŸ“‹ NOTÃCIAS NÃƒO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
             lines.Add("=======================================================\n");
 
             if (LogService.FalhasProcessamento.Count == 0)
@@ -1396,7 +1453,7 @@ namespace NewsImpactRanker.WinForms.Forms
         //private void SaveFinalRankingToFile(List<TopicResult> results)
         //{
         //    // METHOD v2: SaveFinalRankingToFile
-        //    // Alteração: Inclusão da seção de Tópicos Monitorados e estatísticas por categoria.
+        //    // AlteraÃ§Ã£o: InclusÃ£o da seÃ§Ã£o de TÃ³picos Monitorados e estatÃ­sticas por categoria.
         //    try
         //    {
         //        string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -1415,22 +1472,22 @@ namespace NewsImpactRanker.WinForms.Forms
         //        lines.Add($"IA Utilizada: {StorageManager.LoadConfig().SelectedProvider}");
         //        lines.Add("");
 
-        //        // --- NOVA SEÇÃO: TÓPICOS MONITORADOS ---
-        //        lines.Add("===== TÓPICOS MONITORADOS =====");
+        //        // --- NOVA SEÃ‡ÃƒO: TÃ“PICOS MONITORADOS ---
+        //        lines.Add("===== TÃ“PICOS MONITORADOS =====");
         //        if (_allNewsScores.Any())
         //        {
-        //            // Pegamos as chaves (nomes dos tópicos) da primeira notícia com sucesso
+        //            // Pegamos as chaves (nomes dos tÃ³picos) da primeira notÃ­cia com sucesso
         //            var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
         //            foreach (var topicName in allTopics)
         //            {
-        //                // Conta quantas notícias bateram nesse tópico (score > 0)
+        //                // Conta quantas notÃ­cias bateram nesse tÃ³pico (score > 0)
         //                int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
-        //                lines.Add($"- {topicName.PadRight(30)} ({count} notícias encontradas)");
+        //                lines.Add($"- {topicName.PadRight(30)} ({count} notÃ­cias encontradas)");
         //            }
         //        }
         //        else
         //        {
-        //            lines.Add("Nenhum tópico processado.");
+        //            lines.Add("Nenhum tÃ³pico processado.");
         //        }
         //        lines.Add("");
 
@@ -1439,74 +1496,74 @@ namespace NewsImpactRanker.WinForms.Forms
 
         //        if (results.Count == 0)
         //        {
-        //            lines.Add("Nenhuma notícia atingiu os critérios mínimos para o ranking.");
+        //            lines.Add("Nenhuma notÃ­cia atingiu os critÃ©rios mÃ­nimos para o ranking.");
         //        }
         //        else
         //        {
         //            foreach (var r in results)
         //            {
-        //                lines.Add($"📌 TÓPICO: {r.Topic.ToUpper()}");
-        //                lines.Add($"⭐ SCORE : {r.Score}");
-        //                lines.Add($"🔗 URL   : {r.Url}");
-        //                lines.Add($"📄 TÍTULO: {r.Title}");
+        //                lines.Add($"ðŸ“Œ TÃ“PICO: {r.Topic.ToUpper()}");
+        //                lines.Add($"â­ SCORE : {r.Score}");
+        //                lines.Add($"ðŸ”— URL   : {r.Url}");
+        //                lines.Add($"ðŸ“„ TÃTULO: {r.Title}");
         //                lines.Add(new string('-', 40));
         //            }
         //        }
 
         //        lines.Add("");
-        //        lines.Add("===== RESUMO DA EXECUÇÃO =====");
+        //        lines.Add("===== RESUMO DA EXECUÃ‡ÃƒO =====");
         //        lines.Add($"Total de URLs analisadas      : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
-        //        lines.Add($"Sucessos de Classificação     : {_allNewsScores.Count}");
-        //        lines.Add($"Falhas de IA (🤖)            : {_iaErrorCount}");
-        //        lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
-        //        lines.Add($"Tópicos com match no Ranking  : {results.Count}");
+        //        lines.Add($"Sucessos de ClassificaÃ§Ã£o     : {_allNewsScores.Count}");
+        //        lines.Add($"Falhas de IA (ðŸ¤–)            : {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping (ðŸŒ)       : {_scrapErrorCount}");
+        //        lines.Add($"TÃ³picos com match no Ranking  : {results.Count}");
         //        lines.Add("");
 
-        //        lines.Add("===== RESUMO DA EXECUÇÃO =====");
+        //        lines.Add("===== RESUMO DA EXECUÃ‡ÃƒO =====");
         //        lines.Add($"Total de URLs processadas     : {_allNewsScores.Count + _iaErrorCount + _scrapErrorCount}");
         //        lines.Add($"Sucessos Totais (IA + Cache)  : {_successCount}");
-        //        lines.Add($"   -> Desse total, via Cache  : {_cacheHitCount} ⚡"); // 👉 NOVO NO TXT
-        //        lines.Add($"Falhas de IA (🤖)             : {_iaErrorCount}");
-        //        lines.Add($"Falhas de Scraping (🌐)       : {_scrapErrorCount}");
-        //        lines.Add($"Tópicos com match no Ranking  : {results.Count}");
+        //        lines.Add($"   -> Desse total, via Cache  : {_cacheHitCount} âš¡"); // ðŸ‘‰ NOVO NO TXT
+        //        lines.Add($"Falhas de IA (ðŸ¤–)             : {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping (ðŸŒ)       : {_scrapErrorCount}");
+        //        lines.Add($"TÃ³picos com match no Ranking  : {results.Count}");
         //        lines.Add("");
 
-        //        // ... dentro do método SaveFinalRankingToFile ...
+        //        // ... dentro do mÃ©todo SaveFinalRankingToFile ...
         //        lines.Add("");
-        //        lines.Add("===== RESUMO DA EXECUÇÃO =====");
+        //        lines.Add("===== RESUMO DA EXECUÃ‡ÃƒO =====");
         //        lines.Add($"Total de URLs Processadas       : {progressBar.Value}");
-        //        lines.Add($"Sucessos de Ranking (Inéditas)  : {_successCount - _cacheHitCount}");
-        //        lines.Add($"Reaproveitadas via Cache (⚡)   : {_cacheHitCount}");
-        //        lines.Add($"Descartadas por Duplicidade (♻️) : {_duplicateCount}"); // 👉 NOVO
-        //        lines.Add($"Falhas de IA (🤖)               : {_iaErrorCount}");
-        //        lines.Add($"Falhas de Scraping (🌐)         : {_scrapErrorCount}");
-        //        lines.Add($"Tempo Total de Execução         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
+        //        lines.Add($"Sucessos de Ranking (InÃ©ditas)  : {_successCount - _cacheHitCount}");
+        //        lines.Add($"Reaproveitadas via Cache (âš¡)   : {_cacheHitCount}");
+        //        lines.Add($"Descartadas por Duplicidade (â™»ï¸) : {_duplicateCount}"); // ðŸ‘‰ NOVO
+        //        lines.Add($"Falhas de IA (ðŸ¤–)               : {_iaErrorCount}");
+        //        lines.Add($"Falhas de Scraping (ðŸŒ)         : {_scrapErrorCount}");
+        //        lines.Add($"Tempo Total de ExecuÃ§Ã£o         : {_executionTimer.Elapsed:hh\\:mm\\:ss}");
         //        lines.Add("");
 
-        //        // Exemplo de como adicionar no seu StringBuilder (sb) ou texto do relatório:
+        //        // Exemplo de como adicionar no seu StringBuilder (sb) ou texto do relatÃ³rio:
         //        lines.Add("=== RESUMO DE PROCESSAMENTO ===");
         //        lines.Add($"Total de Sucessos: {_successCount}");
         //        lines.Add($"- Processados pelo Groq: {_groqSuccessCount}");
         //        lines.Add($"- Processados pelo Gemini: {_geminiSuccessCount}");
-        //        lines.Add($"- Recuperados da Memória (Cache): {_cacheHitCount}");
+        //        lines.Add($"- Recuperados da MemÃ³ria (Cache): {_cacheHitCount}");
         //        lines.Add($"Falhas de IA: {_iaErrorCount}");
         //        lines.Add($"Falhas de Scraping: {_scrapErrorCount}");
         //        lines.Add("");
 
-        //        // --- DOMÍNIOS COM FALHA ---
+        //        // --- DOMÃNIOS COM FALHA ---
         //        lock (_failedDomainsLock)
         //        {
         //            if (_failedDomains.Any())
         //            {
-        //                lines.Add("===== DOMÍNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
+        //                lines.Add("===== DOMÃNIOS COM PROBLEMAS (HTTP 403/404/Timeout) =====");
         //                foreach (var d in _failedDomains.Distinct())
-        //                    lines.Add($"❌ {d}");
+        //                    lines.Add($"âŒ {d}");
         //            }
         //        }
 
-        //        // Na hora de montar o relatório final (seu StringBuilder sb):
+        //        // Na hora de montar o relatÃ³rio final (seu StringBuilder sb):
         //        lines.Add("\n=======================================================");
-        //        lines.Add("📋 NOTÍCIAS NÃO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
+        //        lines.Add("ðŸ“‹ NOTÃCIAS NÃƒO CATEGORIZADAS / FALHAS DE PROCESSAMENTO");
         //        lines.Add("=======================================================\n");
 
         //        if (LogService.FalhasProcessamento.Count == 0)
@@ -1524,15 +1581,15 @@ namespace NewsImpactRanker.WinForms.Forms
         //        }
 
         //        File.WriteAllLines(_lastReportPath, lines);
-        //        LogService.Info($"Relatório completo salvo em: {_lastReportPath}");
+        //        LogService.Info($"RelatÃ³rio completo salvo em: {_lastReportPath}");
         //    }
         //    catch (Exception ex)
         //    {
-        //        LogService.Error("Erro ao gerar relatório final", ex);
+        //        LogService.Error("Erro ao gerar relatÃ³rio final", ex);
         //    }
         //}
 
-        // ✅ Adicionar este método na classe MainForm se ainda não existir
+        // âœ… Adicionar este mÃ©todo na classe MainForm se ainda nÃ£o existir
         private string ExtractDomain(string url)
         {
             try
@@ -1542,7 +1599,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
             catch
             {
-                // Fallback: extrair domínio manualmente se a URL for malformada
+                // Fallback: extrair domÃ­nio manualmente se a URL for malformada
                 try
                 {
                     var uri = new UriBuilder(url).Host.ToLower();
@@ -1565,38 +1622,38 @@ namespace NewsImpactRanker.WinForms.Forms
                 failedDomainsCopy = new List<string>(_failedDomains);
             }
 
-            // ✅ Contar sucessos e falhas no DataGridView
+            // âœ… Contar sucessos e falhas no DataGridView
             successCount = dgvResults.Rows.Cast<DataGridViewRow>()
                 .Count(r => r.Cells["colStatus"].Value?.ToString() == "Sucesso");
             failCount = dgvResults.Rows.Count - successCount;
 
-            // ✅ Log de estatísticas
+            // âœ… Log de estatÃ­sticas
             double successRate = dgvResults.Rows.Count > 0
                 ? (successCount * 100.0 / dgvResults.Rows.Count)
                 : 0;
 
-            LogService.Info($"=== Relatório Final de Processamento ===");
+            LogService.Info($"=== RelatÃ³rio Final de Processamento ===");
             LogService.Info($"Total de URLs: {dgvResults.Rows.Count}");
-            LogService.Info($"✅ Sucesso: {successCount}");
-            LogService.Info($"❌ Falha: {failCount}");
-            LogService.Info($"📊 Taxa de sucesso: {successRate:F1}%");
+            LogService.Info($"âœ… Sucesso: {successCount}");
+            LogService.Info($"âŒ Falha: {failCount}");
+            LogService.Info($"ðŸ“Š Taxa de sucesso: {successRate:F1}%");
 
             if (failedDomainsCopy.Count > 0)
             {
-                LogService.Warn($"=== Domínios com Falha de Leitura ({failedDomainsCopy.Count}) ===");
+                LogService.Warn($"=== DomÃ­nios com Falha de Leitura ({failedDomainsCopy.Count}) ===");
 
-                string reportMessage = $"O processo foi concluído, mas {failedDomainsCopy.Count} domínio(s) não puderam ser lidos:\n\n";
+                string reportMessage = $"O processo foi concluÃ­do, mas {failedDomainsCopy.Count} domÃ­nio(s) nÃ£o puderam ser lidos:\n\n";
                 reportMessage += string.Join("\n", failedDomainsCopy.Select((d, i) => $"{i + 1}. {d}"));
-                reportMessage += $"\n\n📊 Resumo: {successCount} sucesso(s) / {failCount} falha(s) / {successRate:F1}% taxa de sucesso";
+                reportMessage += $"\n\nðŸ“Š Resumo: {successCount} sucesso(s) / {failCount} falha(s) / {successRate:F1}% taxa de sucesso";
 
-                LogService.Warn("Domínios falhos: " + string.Join(", ", failedDomainsCopy));
+                LogService.Warn("DomÃ­nios falhos: " + string.Join(", ", failedDomainsCopy));
 
-                MessageBox.Show(reportMessage, "Domínios com Falha de Leitura", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(reportMessage, "DomÃ­nios com Falha de Leitura", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             else
             {
-                LogService.Info("🎉 Todos os domínios foram processados com sucesso!");
-                MessageBox.Show($"Processamento concluído com sucesso!\n\n{successCount} URL(s) processada(s) com {successRate:F1}% de taxa de sucesso.",
+                LogService.Info("ðŸŽ‰ Todos os domÃ­nios foram processados com sucesso!");
+                MessageBox.Show($"Processamento concluÃ­do com sucesso!\n\n{successCount} URL(s) processada(s) com {successRate:F1}% de taxa de sucesso.",
                     "Sucesso", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
@@ -1619,7 +1676,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 item.ProcessedAt.ToString("g")
             );
 
-            // 🔥 Ordenar imediatamente após inserir
+            // ðŸ”¥ Ordenar imediatamente apÃ³s inserir
             dgvResults.Sort(dgvResults.Columns["colImpact"],
                 System.ComponentModel.ListSortDirection.Descending);
         }
@@ -1690,7 +1747,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void dgvResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            // ✅ Verificar se o clique foi na coluna de URL e em uma linha válida
+            // âœ… Verificar se o clique foi na coluna de URL e em uma linha vÃ¡lida
             if (e.RowIndex >= 0 && e.ColumnIndex == dgvResults.Columns["colUrl"].Index)
             {
                 string url = dgvResults.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString();
@@ -1699,36 +1756,36 @@ namespace NewsImpactRanker.WinForms.Forms
                 {
                     try
                     {
-                        // ✅ COPIAR URL PARA ÁREA DE TRANSFERÊNCIA
+                        // âœ… COPIAR URL PARA ÃREA DE TRANSFERÃŠNCIA
                         Clipboard.SetText(url);
 
-                        // ✅ FEEDBACK: Log da ação
+                        // âœ… FEEDBACK: Log da aÃ§Ã£o
                         LogService.Info($"URL copiada para clipboard: {url}");
 
-                        // ✅ Referências da linha/célula
+                        // âœ… ReferÃªncias da linha/cÃ©lula
                         var row = dgvResults.Rows[e.RowIndex];
                         var cell = row.Cells[e.ColumnIndex];
 
-                        // ✅ Guardar estado original da célula (para restaurar texto e cor do texto)
+                        // âœ… Guardar estado original da cÃ©lula (para restaurar texto e cor do texto)
                         var originalValue = cell.Value;
                         var originalForeColor = cell.Style.ForeColor;
 
-                        // ✅ Guardar estado original da linha (opcional, caso queira restaurar no futuro)
-                        // Aqui NÃO vamos restaurar a linha, porque você quer manter a cor laranja.
+                        // âœ… Guardar estado original da linha (opcional, caso queira restaurar no futuro)
+                        // Aqui NÃƒO vamos restaurar a linha, porque vocÃª quer manter a cor laranja.
                         // var originalRowBackColor = row.DefaultCellStyle.BackColor;
 
-                        // ✅ FEEDBACK VISUAL NA CÉLULA (temporário)
-                        cell.Value = "✓ Copiado!";
+                        // âœ… FEEDBACK VISUAL NA CÃ‰LULA (temporÃ¡rio)
+                        cell.Value = "âœ“ Copiado!";
                         cell.Style.ForeColor = Color.Green;
 
-                        // ✅ REMOVER A URL DO ARQUIVO (mas NÃO remove do grid)
+                        // âœ… REMOVER A URL DO ARQUIVO (mas NÃƒO remove do grid)
                         RemoveUrlFromConfiguredFile(url);
 
-                        // ✅ MARCAR A LINHA COM LARANJA FRACO (permanente)
+                        // âœ… MARCAR A LINHA COM LARANJA FRACO (permanente)
                         row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 200); // laranja fraco
                         row.DefaultCellStyle.ForeColor = Color.Black;
 
-                        // ✅ Restaurar APENAS a célula (texto/cor do texto) após 1.5 segundos
+                        // âœ… Restaurar APENAS a cÃ©lula (texto/cor do texto) apÃ³s 1.5 segundos
                         var timer = new System.Windows.Forms.Timer();
                         timer.Interval = 1500;
                         timer.Tick += (s, args) =>
@@ -1738,7 +1795,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                             if (this.IsDisposed) return;
 
-                            // Thread-safe: garantir que a atualização da UI seja na thread principal
+                            // Thread-safe: garantir que a atualizaÃ§Ã£o da UI seja na thread principal
                             if (this.InvokeRequired)
                             {
                                 this.Invoke(new Action(() =>
@@ -1757,11 +1814,11 @@ namespace NewsImpactRanker.WinForms.Forms
                     }
                     catch (Exception ex)
                     {
-                        // ✅ Tratamento de erro caso o clipboard não esteja acessível
+                        // âœ… Tratamento de erro caso o clipboard nÃ£o esteja acessÃ­vel
                         LogService.Error($"Erro ao copiar URL para clipboard: {url}", ex);
                         MessageBox.Show(
-                            "Não foi possível copiar o link para a área de transferência.\n\n" +
-                            "Dica: Verifique se outro aplicativo não está bloqueando o clipboard.",
+                            "NÃ£o foi possÃ­vel copiar o link para a Ã¡rea de transferÃªncia.\n\n" +
+                            "Dica: Verifique se outro aplicativo nÃ£o estÃ¡ bloqueando o clipboard.",
                             "Erro ao Copiar",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Warning
@@ -1803,7 +1860,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 if (string.IsNullOrWhiteSpace(_lastReportPath) ||
                     !File.Exists(_lastReportPath))
                 {
-                    MessageBox.Show("Nenhum relatório foi gerado ainda.",
+                    MessageBox.Show("Nenhum relatÃ³rio foi gerado ainda.",
                         "Aviso",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
@@ -1818,8 +1875,8 @@ namespace NewsImpactRanker.WinForms.Forms
             }
             catch (Exception ex)
             {
-                LogService.Error("Erro ao abrir relatório", ex);
-                MessageBox.Show("Erro ao abrir o relatório.",
+                LogService.Error("Erro ao abrir relatÃ³rio", ex);
+                MessageBox.Show("Erro ao abrir o relatÃ³rio.",
                     "Erro",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -1835,7 +1892,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
                 {
-                    MessageBox.Show("Log ainda não foi gerado.",
+                    MessageBox.Show("Log ainda nÃ£o foi gerado.",
                         "Aviso",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
@@ -1858,7 +1915,7 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             List<string> urls = new List<string>();
 
-            // 1️⃣ Verificar se há URLs digitadas na interface
+            // 1ï¸âƒ£ Verificar se hÃ¡ URLs digitadas na interface
             var textUrls = txtUrls.Lines
                 .Select(l => l.Trim())
                 .Where(l => !string.IsNullOrWhiteSpace(l))
@@ -1873,10 +1930,10 @@ namespace NewsImpactRanker.WinForms.Forms
                 return urls;
             }
 
-            // 2️⃣ Caso contrário usar o arquivo configurado
+            // 2ï¸âƒ£ Caso contrÃ¡rio usar o arquivo configurado
             if (string.IsNullOrWhiteSpace(config.NewsFilePath) || !File.Exists(config.NewsFilePath))
             {
-                throw new Exception("Arquivo de URLs não configurado ou não encontrado.");
+                throw new Exception("Arquivo de URLs nÃ£o configurado ou nÃ£o encontrado.");
             }
 
             var fileUrls = File.ReadAllLines(config.NewsFilePath)
@@ -1898,45 +1955,63 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             var topicResults = new List<TopicResult>();
 
-            // Rastreador: Impede que a MESMA notícia ocupe duas linhas no Grid final
+            // Rastreador: Impede que a MESMA notÃ­cia ocupe duas linhas no Grid final
             var usedNewsUrls = new HashSet<string>();
 
-            // 1. Navegamos pelos códigos oficiais do seu TopicCatalog
+            // 1. Navegamos pelos cÃ³digos oficiais do seu TopicCatalog
             foreach (var sigla in TopicCatalog.Codes)
             {
-                // 2. Selecionamos as notícias que tiraram a nota mínima para esta sigla
-                // E que ainda NÃO FORAM usadas em categorias anteriores
+                // O valor recebido Ã© a meta ideal; ele nÃ£o elimina candidatas.
                 var eligibleNews = _allNewsScores
-                    .Where(n => n.Scores.ContainsKey(sigla) && n.Scores[sigla] >= minimumScore)
+                    .Where(n => n.Scores != null && n.Scores.ContainsKey(sigla) && n.Scores[sigla] > 0)
                     .Where(n => !usedNewsUrls.Contains(n.Url))
                     .ToList();
 
+                string nomeCompleto = TopicCatalog.CodeToName.ContainsKey(sigla)
+                                      ? TopicCatalog.CodeToName[sigla]
+                                      : sigla;
+                LogService.Info($"[RANKING] Categoria: {nomeCompleto}");
+                LogService.Info($"[RANKING] Candidatas avaliadas: {eligibleNews.Count}");
+                LogService.Info($"[RANKING] PontuaÃ§Ã£o ideal: {minimumScore}");
+
                 if (eligibleNews.Any())
                 {
-                    // Pega a melhor notícia para este tópico específico
+                    // Pega a melhor notÃ­cia para este tÃ³pico especÃ­fico
                     var winner = eligibleNews
                         .OrderByDescending(n => n.Scores[sigla])
+                        .ThenByDescending(n => n.Scores.Values.Sum())
+                        .ThenBy(n => n.SourceOrder)
+                        .ThenBy(n => n.Url, StringComparer.OrdinalIgnoreCase)
                         .FirstOrDefault();
 
                     if (winner != null)
                     {
-                        // Registra que a notícia ganhou uma vaga (não poderá entrar nas próximas categorias)
                         usedNewsUrls.Add(winner.Url);
 
-                        // Busca o nome amigável (Ex: "CS" -> "Ciência Controversa")
-                        string nomeCompleto = TopicCatalog.CodeToName.ContainsKey(sigla)
-                                              ? TopicCatalog.CodeToName[sigla]
-                                              : sigla;
+                        int winnerScore = winner.Scores[sigla];
+                        string status = winnerScore >= minimumScore
+                            ? "atingiu o ideal"
+                            : "abaixo do ideal, melhor disponÃ­vel";
+                        LogService.Info($"[RANKING] Maior pontuaÃ§Ã£o encontrada: {winnerScore}");
+                        LogService.Info($"[RANKING] NotÃ­cia selecionada: {winner.Url}");
+                        LogService.Info($"[RANKING] SituaÃ§Ã£o: {status}");
 
+                        // Busca o nome amigÃ¡vel (Ex: "CS" -> "CiÃªncia Controversa")
                         topicResults.Add(new TopicResult
                         {
                             Topic = nomeCompleto,
                             Url = winner.Url,
-                            Score = winner.Scores[sigla],
+                            Score = winnerScore,
                             Summary = winner.Summary,
-                            IsClicked = false
+                            IsClicked = false,
+                            IdealScore = minimumScore,
+                            ScoreStatus = status
                         });
                     }
+                }
+                else
+                {
+                    LogService.Info("[RANKING] Nenhuma notÃ­cia disponÃ­vel");
                 }
             }
 
@@ -1952,8 +2027,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 return;
             }
 
-            // 1. Configurações de Fonte e Estilo
-            // Você pode alterar o "12" para o tamanho que desejar (ex: 11, 14, etc)
+            // 1. ConfiguraÃ§Ãµes de Fonte e Estilo
+            // VocÃª pode alterar o "12" para o tamanho que desejar (ex: 11, 14, etc)
             Font fonteTexto = new Font("Segoe UI", 12f, FontStyle.Regular);
             Font fonteCabecalho = new Font("Segoe UI", 11f, FontStyle.Bold);
 
@@ -1961,7 +2036,7 @@ namespace NewsImpactRanker.WinForms.Forms
             dgvTopicResults.Columns.Clear();
             dgvTopicResults.AutoGenerateColumns = false;
 
-            // 2. Aplica a fonte nas células e nos cabeçalhos
+            // 2. Aplica a fonte nas cÃ©lulas e nos cabeÃ§alhos
             dgvTopicResults.DefaultCellStyle.Font = fonteTexto;
             dgvTopicResults.ColumnHeadersDefaultCellStyle.Font = fonteCabecalho;
 
@@ -2013,13 +2088,13 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 Name = CopyScrapColumnName,
                 HeaderText = "",
-                Text = "📋",
+                Text = "ðŸ“‹",
                 Width = 44,
                 UseColumnTextForButtonValue = true,
                 ToolTipText = "Copiar scrap"
             });
 
-            // Estética adicional
+            // EstÃ©tica adicional
             dgvTopicResults.RowHeadersVisible = false;
             dgvTopicResults.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             dgvTopicResults.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240); // Linhas alternadas para facilitar leitura
@@ -2045,7 +2120,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     MarkTopicResultAsHandled(url);
                     row.DefaultCellStyle.BackColor = Color.FromArgb(204, 120, 0);
                     row.DefaultCellStyle.ForeColor = Color.White;
-                    ShowTopicGridFeedback(row, e.ColumnIndex, "✓ URL");
+                    ShowTopicGridFeedback(row, e.ColumnIndex, "âœ“ URL");
                     return;
                 }
 
@@ -2055,7 +2130,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
                     if (string.IsNullOrWhiteSpace(scrapText))
                     {
-                        MessageBox.Show("Esta notícia não possui scrap salvo para cópia.", "Scrap indisponível", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show("Esta notÃ­cia nÃ£o possui scrap salvo para cÃ³pia.", "Scrap indisponÃ­vel", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
 
@@ -2065,7 +2140,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     MarkTopicResultAsHandled(url);
                     row.DefaultCellStyle.BackColor = Color.FromArgb(204, 120, 0);
                     row.DefaultCellStyle.ForeColor = Color.White;
-                    ShowTopicGridFeedback(row, e.ColumnIndex, "✓ Scrap");
+                    ShowTopicGridFeedback(row, e.ColumnIndex, "âœ“ Scrap");
                     return;
                 }
 
@@ -2084,12 +2159,12 @@ namespace NewsImpactRanker.WinForms.Forms
                 return cachedNews.RawText;
             }
 
-            UpdateInfoLabel(GetFormattedStatus("Buscando scrap da notícia..."));
+            UpdateInfoLabel(GetFormattedStatus("Buscando scrap da notÃ­cia..."));
 
             var newsItem = await _scrapingService.ScrapeAsync(url);
             if (newsItem == null || newsItem.Status != "Sucesso" || string.IsNullOrWhiteSpace(newsItem.RawText))
             {
-                LogService.Warn($"Scrap sob demanda indisponível para {url}");
+                LogService.Warn($"Scrap sob demanda indisponÃ­vel para {url}");
                 return null;
             }
 
@@ -2115,7 +2190,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             SaveEvaluatedCache();
-            LogService.Info($"[SCRAP] Conteúdo atualizado sob demanda para {url}");
+            LogService.Info($"[SCRAP] ConteÃºdo atualizado sob demanda para {url}");
             return newsItem.RawText;
         }
 
@@ -2148,7 +2223,7 @@ namespace NewsImpactRanker.WinForms.Forms
             });
 
             SummaryCacheManager.SaveCache(_summaryCache);
-            LogService.Info($"[CACHE] Resumo memorizado manualmente para a notícia: {url}");
+            LogService.Info($"[CACHE] Resumo memorizado manualmente para a notÃ­cia: {url}");
         }
 
         private void MarkTopicResultAsHandled(string url)
@@ -2227,8 +2302,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
             while (secondsToWait > 0)
             {
-                // Mostra o dashboard completo + o cronômetro da pausa
-                UpdateInfoLabel(GetFormattedStatus($"Pausa de segurança: {secondsToWait}s (Limite Groq)"));
+                // Mostra o dashboard completo + o cronÃ´metro da pausa
+                UpdateInfoLabel(GetFormattedStatus($"Pausa de seguranÃ§a: {secondsToWait}s (Limite Groq)"));
                 await Task.Delay(1000);
                 secondsToWait--;
             }
@@ -2248,7 +2323,7 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 TimeSpan elapsed = DateTime.Now - _minuteStartTime;
 
-                // Se já passou mais de 1 minuto, reinicia a janela de contagem
+                // Se jÃ¡ passou mais de 1 minuto, reinicia a janela de contagem
                 if (elapsed.TotalMinutes >= 1)
                 {
                     _tokensCurrentMinute = 0;
@@ -2256,7 +2331,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     elapsed = TimeSpan.Zero;
                 }
 
-                // Se a requisição atual ultrapassar o limite seguro de TPM (ex: 5500)
+                // Se a requisiÃ§Ã£o atual ultrapassar o limite seguro de TPM (ex: 5500)
                 if (_tokensCurrentMinute + estimatedTokens > TPM_LIMIT)
                 {
                     // Calcula os milissegundos que faltam para completar a janela de 1 minuto
@@ -2274,7 +2349,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 }
             }
 
-            // Se for necessário esperar, chama a rotina de contagem decrescente visual
+            // Se for necessÃ¡rio esperar, chama a rotina de contagem decrescente visual
             if (waitTimeMs > 0)
             {
                 await DelayWithCountdownAsync(waitTimeMs);
@@ -2296,19 +2371,19 @@ namespace NewsImpactRanker.WinForms.Forms
                 eta = tempoRestante.TotalHours >= 1 ? tempoRestante.ToString(@"hh\:mm\:ss") : tempoRestante.ToString(@"mm\:ss");
             }
 
-            // Montagem da string com ícones
-            string dashboard = $"✅ {_successCount} | ♻️ {_duplicateCount} | ⚡ {_cacheHitCount} | 🤖 {_iaErrorCount} | 🌐 {_scrapErrorCount} | 📈 {processados}/{total} | ⏳ ETA: {eta}";
+            // Montagem da string com Ã­cones
+            string dashboard = $"âœ… {_successCount} | â™»ï¸ {_duplicateCount} | âš¡ {_cacheHitCount} | ðŸ¤– {_iaErrorCount} | ðŸŒ {_scrapErrorCount} | ðŸ“ˆ {processados}/{total} | â³ ETA: {eta}";
 
             if (!string.IsNullOrEmpty(currentAction))
-                dashboard += $"\n→ {currentAction}";
+                dashboard += $"\nâ†’ {currentAction}";
 
             if (_iaErrorCount > 0)
-                dashboard += $"\n⚠ Último Erro IA: {_lastIaError}";
+                dashboard += $"\nâš  Ãšltimo Erro IA: {_lastIaError}";
 
             return dashboard;
         }
 
-        // Método para Salvar
+        // MÃ©todo para Salvar
         private List<TopicResult> ReadLastResults()
         {
             if (!File.Exists(_lastResultsPath))
@@ -2334,7 +2409,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
-        // Método para Carregar
+        // MÃ©todo para Carregar
         private void MergePendingTopicResults(List<TopicResult> newResults)
         {
             var mergedByUrl = new Dictionary<string, TopicResult>(StringComparer.OrdinalIgnoreCase);
@@ -2367,7 +2442,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 if (_currentTopicResults.Any())
                 {
                     DisplayTopicResults(_currentTopicResults);
-                    UpdateInfoLabel($"Carregados {_currentTopicResults.Count} resultados nÃ£o lidos da Ãºltima sessÃ£o.");
+                    UpdateInfoLabel($"Carregados {_currentTopicResults.Count} resultados nÃƒÂ£o lidos da ÃƒÂºltima sessÃƒÂ£o.");
                 }
 
                 if (File.Exists(_lastResultsPath))
@@ -2375,14 +2450,14 @@ namespace NewsImpactRanker.WinForms.Forms
                     string json = File.ReadAllText(_lastResultsPath);
                     var allResults = JsonConvert.DeserializeObject<List<TopicResult>>(json) ?? new List<TopicResult>();
 
-                    // Filtra pegando APENAS os que NÃO foram clicados
+                    // Filtra pegando APENAS os que NÃƒO foram clicados
                     _currentTopicResults = allResults.Where(r => !r.IsClicked).ToList();
 
                     // Mostra na Grid se tiver algum sobrando
                     if (_currentTopicResults.Any())
                     {
                         DisplayTopicResults(_currentTopicResults);
-                        UpdateInfoLabel($"Carregados {_currentTopicResults.Count} resultados não lidos da última sessão.");
+                        UpdateInfoLabel($"Carregados {_currentTopicResults.Count} resultados nÃ£o lidos da Ãºltima sessÃ£o.");
                     }
                 }
             }
@@ -2394,7 +2469,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void MainForm_Load(object sender, EventArgs e)
         {
-            LogService.Info(">>> Aplicativo Iniciado. Carregando memórias...");
+            LogService.Info(">>> Aplicativo Iniciado. Carregando memÃ³rias...");
             ApplyVersionToCaption();
             LoadLastResults();
             LoadEvaluatedCache();
@@ -2405,7 +2480,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private void button1_Click(object sender, EventArgs e)
         {
             var result = MessageBox.Show(
-                "Isso apagará TODO o histórico de resumos da IA e também limpará a lista de leitura atual da tela. Deseja continuar?",
+                "Isso apagarÃ¡ TODO o histÃ³rico de resumos da IA e tambÃ©m limparÃ¡ a lista de leitura atual da tela. Deseja continuar?",
                 "Limpeza Total",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
@@ -2417,12 +2492,12 @@ namespace NewsImpactRanker.WinForms.Forms
                     // 1. Limpa fisicamente usando a nova classe centralizada
                     SummaryCacheManager.ClearCache();
 
-                    // 2. Limpa a lista na memória do MainForm para fazer efeito imediato
+                    // 2. Limpa a lista na memÃ³ria do MainForm para fazer efeito imediato
                     if (_summaryCache != null) _summaryCache.Clear();
 
-                    // 3. Limpa a Grid e as pendências atuais
+                    // 3. Limpa a Grid e as pendÃªncias atuais
                     if (_currentTopicResults != null) _currentTopicResults.Clear();
-                    SaveLastResults(); // Se você já tiver um LastResultsManager, melhor ainda!
+                    SaveLastResults(); // Se vocÃª jÃ¡ tiver um LastResultsManager, melhor ainda!
                     dgvTopicResults.DataSource = null;
 
                     UpdateInfoLabel("Sistema e tela totalmente limpos!");
@@ -2438,7 +2513,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private void btnLimparCache_Click(object sender, EventArgs e)
         {
             var confirmacao = MessageBox.Show(
-                "Isso removerá todos os resultados salvos anteriormente e forçará a IA a reprocessar tudo. Deseja continuar?",
+                "Isso removerÃ¡ todos os resultados salvos anteriormente e forÃ§arÃ¡ a IA a reprocessar tudo. Deseja continuar?",
                 "Limpar Cache Completo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
@@ -2447,35 +2522,37 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 try
                 {
-                    // 1. Limpa as listas na Memória RAM
+                    // 1. Limpa as listas na MemÃ³ria RAM
                     _evaluatedCache.Clear();
                     _summaryCache.Clear();
                     _currentTopicResults.Clear();
                     _allNewsScores.Clear();
 
-                    // 2. Apaga os arquivos físicos no Disco
+                    // 2. Apaga os arquivos fÃ­sicos no Disco
                     if (File.Exists(_cachePath)) File.Delete(_cachePath);
                     if (File.Exists(_summaryCachePath)) File.Delete(_summaryCachePath);
                     if (File.Exists(_lastResultsPath)) File.Delete(_lastResultsPath);
 
-                    // 3. Notifica o Log e o Usuário
-                    LogService.Info("🧹 Faxina completa realizada! Caches de avaliação e sumários foram removidos.");
+                    // 3. Notifica o Log e o UsuÃ¡rio
+                    LogService.Info("ðŸ§¹ Faxina completa realizada! Caches de avaliaÃ§Ã£o e sumÃ¡rios foram removidos.");
 
-                    // Zera os contadores da tela para o próximo processamento parecer "limpo"
+                    // Zera os contadores da tela para o prÃ³ximo processamento parecer "limpo"
                     _processedCount = 0;
                     _successCount = 0;
                     _cacheHitCount = 0;
                     _iaErrorCount = 0;
 
-                    MessageBox.Show("Caches apagados com sucesso! O próximo processamento será 100% novo.", "Sucesso");
+                    MessageBox.Show("Caches apagados com sucesso! O prÃ³ximo processamento serÃ¡ 100% novo.", "Sucesso");
                 }
                 catch (Exception ex)
                 {
                     LogService.Error($"Erro ao limpar cache: {ex.Message}");
-                    MessageBox.Show("Erro ao apagar arquivos de cache. Verifique se eles não estão abertos em outro programa.");
+                    MessageBox.Show("Erro ao apagar arquivos de cache. Verifique se eles nÃ£o estÃ£o abertos em outro programa.");
                 }
             }
         }
     }
 
 }
+
+

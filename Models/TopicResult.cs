@@ -13,5 +13,9 @@
 
         public string AiProvider { get; set; }
 
+        public int IdealScore { get; set; }
+
+        public string ScoreStatus { get; set; }
+
     }
 }
