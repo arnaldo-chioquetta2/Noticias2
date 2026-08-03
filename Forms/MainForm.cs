@@ -1,4 +1,4 @@
-﻿using NewsImpactRanker.WinForms.Models;
+using NewsImpactRanker.WinForms.Models;
 using NewsImpactRanker.WinForms.Services;
 using NewsImpactRanker.WinForms.Storage;
 using NewsImpactRanker.WinForms.Utils;
@@ -36,6 +36,18 @@ namespace NewsImpactRanker.WinForms.Forms
         private List<TopicResult> _currentTopicResults = new List<TopicResult>();
         private Dictionary<string, NewsScoresItem> _evaluatedCache = new Dictionary<string, NewsScoresItem>();
         private readonly object _evaluatedCacheFileLock = new object();
+        private static readonly object _newsFileLock = new object();
+
+        private sealed class AppendUrlsResult
+        {
+            public int InputCount { get; set; }
+            public int ValidCount { get; set; }
+            public int InvalidCount { get; set; }
+            public int DuplicateCount { get; set; }
+            public int AddedCount { get; set; }
+            public string FilePath { get; set; }
+            public string DateBlock { get; set; }
+        }
 
         private sealed class CacheUrlComparison
         {
@@ -351,6 +363,18 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
+        private void btnSummaryCache_Click(object sender, EventArgs e)
+        {
+            using (var viewer = new SummaryCacheViewerForm())
+                viewer.ShowDialog(this);
+        }
+        private void btnViewPostedUrls_Click(object sender, EventArgs e)
+        {
+            using (var form = new PostedUrlsViewerForm())
+            {
+                form.ShowDialog(this);
+            }
+        }
         private void btnConfig_Click(object sender, EventArgs e)
         {
             using (var configForm = new ConfigForm())
@@ -403,6 +427,23 @@ namespace NewsImpactRanker.WinForms.Forms
                     MessageBoxIcon.Warning
                 );
                 btnConfig_Click(null, null); // Abre a tela de configuraÃ§Ã£o
+                return;
+            }
+
+            try
+            {
+                AppendUrlsResult appendResult = AppendTxtUrlsToConfiguredFile(config);
+                if (appendResult.AddedCount > 0)
+                    txtUrls.Clear();
+            }
+            catch (Exception ex)
+            {
+                LogService.Error($"[URL_FILE] ERRO ao atualizar arquivo: {ex.GetType().Name}: {ex.Message}", ex);
+                MessageBox.Show(
+                    $"Não foi possível atualizar o arquivo de notícias configurado.\n\n{ex.Message}",
+                    "Erro",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
                 return;
             }
 
@@ -773,44 +814,12 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private static string NormalizeCanonicalSummary(string summary)
         {
-            if (string.IsNullOrWhiteSpace(summary)) return string.Empty;
-
-            string decomposed = summary.ToLowerInvariant().Normalize(NormalizationForm.FormD);
-            var chars = decomposed
-                .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-                .Select(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c) ? c : ' ')
-                .ToArray();
-
-            return string.Join(" ", new string(chars)
-                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(NormalizeCanonicalToken)
-                .Select(CanonicalEquivalent));
+            return CanonicalSummaryMatcher.Normalize(summary);
         }
 
-        private static string NormalizeCanonicalToken(string token)
+        private static int SharedTokenCount(string left, string right)
         {
-            if (token.Length > 4 && token.EndsWith("s", StringComparison.Ordinal))
-                token = token.Substring(0, token.Length - 1);
-
-            return CanonicalEquivalent(token);
-        }
-
-        private static string CanonicalEquivalent(string token)
-        {
-            switch (token)
-            {
-                case "reaproveitavel": return "reutilizavel";
-                case "chines": return "china";
-                case "pouso":
-                case "pousar":
-                case "pousou": return "pousar";
-                case "envelhecimento":
-                case "envelhece":
-                case "envelhecer": return "envelhecer";
-                case "cerebral":
-                case "cerebro": return "cerebro";
-                default: return token;
-            }
+            return CanonicalSummaryMatcher.SharedTokenCount(left, right);
         }
 
         private static int CountWords(string value)
@@ -820,19 +829,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private static double CalculateCanonicalTokenSimilarity(string left, string right)
         {
-            var leftTokens = new HashSet<string>(left.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
-            var rightTokens = new HashSet<string>(right.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
-            if (leftTokens.Count == 0 || rightTokens.Count == 0) return 0;
-
-            int intersection = leftTokens.Intersect(rightTokens).Count();
-            int union = leftTokens.Union(rightTokens).Count();
-            return union == 0 ? 0 : (double)intersection / union;
-        }
-        private static int SharedTokenCount(string left, string right)
-        {
-            var leftTokens = new HashSet<string>(left.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
-            var rightTokens = new HashSet<string>(right.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
-            return leftTokens.Intersect(rightTokens).Count();
+            return CanonicalSummaryMatcher.Similarity(left, right);
         }
 
         private void SaveCanonicalSummary(string canonicalSummary, string url, string provider, int wordCount)
@@ -1666,21 +1663,21 @@ namespace NewsImpactRanker.WinForms.Forms
                 return;
             }
 
-            dgvResults.Rows.Add(
-                item.ImpactScore,
-                item.Title,
-                item.Url,
-                item.Category,
-                item.ImpactReason,
-                item.Status,
-                item.ProcessedAt.ToString("g")
-            );
+            bool alreadyPosted = PostedUrlsManager.Contains(item.Url);
+            int rowIndex = dgvResults.Rows.Add(
+                item.ImpactScore, item.Title, item.Url, item.Category,
+                item.ImpactReason, item.Status, item.ProcessedAt.ToString("g"),
+                alreadyPosted ? "Postada" : "Já postada");
 
-            // ðŸ”¥ Ordenar imediatamente apÃ³s inserir
+            DataGridViewRow row = dgvResults.Rows[rowIndex];
+            row.Tag = item;
+            row.Cells["colAlreadyPosted"].ToolTipText = alreadyPosted
+                ? "Esta URL já está marcada como postada."
+                : "Executar o procedimento normal e marcar como postada.";
+
             dgvResults.Sort(dgvResults.Columns["colImpact"],
                 System.ComponentModel.ListSortDirection.Descending);
         }
-
         private void UpdateProgress()
         {
             if (this.InvokeRequired)
@@ -1747,112 +1744,104 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void dgvResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            // âœ… Verificar se o clique foi na coluna de URL e em uma linha vÃ¡lida
-            if (e.RowIndex >= 0 && e.ColumnIndex == dgvResults.Columns["colUrl"].Index)
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+
+            DataGridViewRow row = dgvResults.Rows[e.RowIndex];
+            string url = row.Cells["colUrl"].Value?.ToString();
+            if (string.IsNullOrWhiteSpace(url) || !UrlValidator.IsValid(url)) return;
+
+            string columnName = dgvResults.Columns[e.ColumnIndex].Name;
+            if (columnName == "colUrl")
             {
-                string url = dgvResults.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString();
-
-                if (!string.IsNullOrEmpty(url))
-                {
-                    try
-                    {
-                        // âœ… COPIAR URL PARA ÃREA DE TRANSFERÃŠNCIA
-                        Clipboard.SetText(url);
-
-                        // âœ… FEEDBACK: Log da aÃ§Ã£o
-                        LogService.Info($"URL copiada para clipboard: {url}");
-
-                        // âœ… ReferÃªncias da linha/cÃ©lula
-                        var row = dgvResults.Rows[e.RowIndex];
-                        var cell = row.Cells[e.ColumnIndex];
-
-                        // âœ… Guardar estado original da cÃ©lula (para restaurar texto e cor do texto)
-                        var originalValue = cell.Value;
-                        var originalForeColor = cell.Style.ForeColor;
-
-                        // âœ… Guardar estado original da linha (opcional, caso queira restaurar no futuro)
-                        // Aqui NÃƒO vamos restaurar a linha, porque vocÃª quer manter a cor laranja.
-                        // var originalRowBackColor = row.DefaultCellStyle.BackColor;
-
-                        // âœ… FEEDBACK VISUAL NA CÃ‰LULA (temporÃ¡rio)
-                        cell.Value = "âœ“ Copiado!";
-                        cell.Style.ForeColor = Color.Green;
-
-                        // âœ… REMOVER A URL DO ARQUIVO (mas NÃƒO remove do grid)
-                        RemoveUrlFromConfiguredFile(url);
-
-                        // âœ… MARCAR A LINHA COM LARANJA FRACO (permanente)
-                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 200); // laranja fraco
-                        row.DefaultCellStyle.ForeColor = Color.Black;
-
-                        // âœ… Restaurar APENAS a cÃ©lula (texto/cor do texto) apÃ³s 1.5 segundos
-                        var timer = new System.Windows.Forms.Timer();
-                        timer.Interval = 1500;
-                        timer.Tick += (s, args) =>
-                        {
-                            timer.Stop();
-                            timer.Dispose();
-
-                            if (this.IsDisposed) return;
-
-                            // Thread-safe: garantir que a atualizaÃ§Ã£o da UI seja na thread principal
-                            if (this.InvokeRequired)
-                            {
-                                this.Invoke(new Action(() =>
-                                {
-                                    cell.Value = originalValue;
-                                    cell.Style.ForeColor = originalForeColor;
-                                }));
-                            }
-                            else
-                            {
-                                cell.Value = originalValue;
-                                cell.Style.ForeColor = originalForeColor;
-                            }
-                        };
-                        timer.Start();
-                    }
-                    catch (Exception ex)
-                    {
-                        // âœ… Tratamento de erro caso o clipboard nÃ£o esteja acessÃ­vel
-                        LogService.Error($"Erro ao copiar URL para clipboard: {url}", ex);
-                        MessageBox.Show(
-                            "NÃ£o foi possÃ­vel copiar o link para a Ã¡rea de transferÃªncia.\n\n" +
-                            "Dica: Verifique se outro aplicativo nÃ£o estÃ¡ bloqueando o clipboard.",
-                            "Erro ao Copiar",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
-                    }
-                }
+                HandleNormalUrlAction(url, row, row.Cells["colUrl"]);
+                return;
             }
+
+            if (columnName != "colAlreadyPosted") return;
+
+            LogService.Info($"[POSTED_URLS] Solicitação para marcar URL: {url}");
+            if (PostedUrlsManager.Contains(url))
+            {
+                MessageBox.Show("Esta URL já estava marcada como postada.", "Já postada", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                row.Cells["colAlreadyPosted"].Value = "Postada";
+                return;
+            }
+
+            if (MessageBox.Show(
+                "Marcar esta notícia como já postada?\n\nA URL será processada normalmente e registrada para análise posterior.",
+                "Confirmar notícia postada", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            LogService.Info("[POSTED_URLS] Executando procedimento normal da URL");
+            if (!HandleNormalUrlAction(url, row, row.Cells["colUrl"])) return;
+
+            LogService.Info("[POSTED_URLS] Procedimento normal concluído");
+            string error;
+            string provider = StorageManager.LoadConfig().SelectedProvider.ToString();
+            if (!PostedUrlsManager.Add(url, string.Empty, provider, out error))
+            {
+                MessageBox.Show(error ?? "Não foi possível registrar a URL como postada.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            row.Cells["colAlreadyPosted"].Value = "Postada";
+            row.Cells["colAlreadyPosted"].ToolTipText = "URL já registrada como postada.";
         }
 
-        private void RemoveUrlFromConfiguredFile(string url)
+        private bool HandleNormalUrlAction(string url, DataGridViewRow row, DataGridViewCell cell)
+        {
+            try
+            {
+                Clipboard.SetText(url);
+                LogService.Info($"URL copiada para clipboard: {url}");
+                object originalValue = cell.Value;
+                Color originalForeColor = cell.Style.ForeColor;
+                cell.Value = "✓ Copiado!";
+                cell.Style.ForeColor = Color.Green;
+
+                if (!RemoveUrlFromConfiguredFile(url)) return false;
+
+                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 200);
+                row.DefaultCellStyle.ForeColor = Color.Black;
+                var timer = new System.Windows.Forms.Timer { Interval = 1500 };
+                timer.Tick += (s, args) =>
+                {
+                    timer.Stop(); timer.Dispose();
+                    if (IsDisposed) return;
+                    cell.Value = originalValue;
+                    cell.Style.ForeColor = originalForeColor;
+                };
+                timer.Start();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogService.Error($"Erro ao executar procedimento normal da URL: {url}", ex);
+                MessageBox.Show("Não foi possível concluir o procedimento da URL.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+        }
+        private bool RemoveUrlFromConfiguredFile(string url)
         {
             try
             {
                 var config = StorageManager.LoadConfig();
-
-                if (string.IsNullOrWhiteSpace(config.NewsFilePath) || !File.Exists(config.NewsFilePath))
-                    return;
-
+                if (string.IsNullOrWhiteSpace(config.NewsFilePath) || !File.Exists(config.NewsFilePath)) return true;
                 var lines = File.ReadAllLines(config.NewsFilePath).ToList();
-
-                int removed = lines.RemoveAll(l => l.Trim() == url);
-
+                int removed = lines.RemoveAll(l => string.Equals(l.Trim(), url, StringComparison.OrdinalIgnoreCase));
                 if (removed > 0)
                 {
                     File.WriteAllLines(config.NewsFilePath, lines);
                     LogService.Info($"URL removida do arquivo de entrada: {url}");
                 }
+                return true;
             }
             catch (Exception ex)
             {
                 LogService.Error("Erro ao remover URL do arquivo", ex);
+                return false;
             }
         }
-
         private void btnOpenReport_Click(object sender, EventArgs e)
         {
             try
@@ -1911,6 +1900,158 @@ namespace NewsImpactRanker.WinForms.Forms
             }
         }
 
+        private static bool IsValidNewsFileUrl(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || IsClearlyContaminatedUrl(value))
+                return false;
+
+            if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out Uri uri))
+                return false;
+
+            return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+        }
+
+        private static bool TryParseNewsDate(string line, out int day, out int month)
+        {
+            day = 0;
+            month = 0;
+            string value = (line ?? string.Empty).Trim();
+            if (value.Length != 5 || value[2] != '/')
+                return false;
+
+            if (!int.TryParse(value.Substring(0, 2), out day) ||
+                !int.TryParse(value.Substring(3, 2), out month) ||
+                month < 1 || month > 12 ||
+                day < 1 || day > DateTime.DaysInMonth(2000, month))
+            {
+                day = 0;
+                month = 0;
+                return false;
+            }
+
+            return true;
+        }
+
+        private AppendUrlsResult AppendTxtUrlsToConfiguredFile(AppConfig config)
+        {
+            LogService.Info("[URL_FILE] Lendo conteúdo de txtUrls");
+
+            var result = new AppendUrlsResult
+            {
+                InputCount = txtUrls.Lines == null ? 0 : txtUrls.Lines.Length,
+                FilePath = config == null ? null : config.NewsFilePath
+            };
+            LogService.Info($"[URL_FILE] Linhas recebidas: {result.InputCount}");
+
+            var inputUrls = new List<string>();
+            var inputKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string rawLine in txtUrls.Lines ?? new string[0])
+            {
+                string candidate = (rawLine ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(candidate))
+                    continue;
+
+                if (!IsValidNewsFileUrl(candidate))
+                {
+                    result.InvalidCount++;
+                    LogService.Warn($"[URL_FILE] Linha descartada (URL inválida): {candidate}");
+                    continue;
+                }
+
+                result.ValidCount++;
+                string key = NormalizeCacheUrl(candidate);
+                if (!inputKeys.Add(key))
+                {
+                    result.DuplicateCount++;
+                    LogService.Info($"[URL_FILE] URL duplicada no campo; não adicionada: {candidate}");
+                    continue;
+                }
+
+                inputUrls.Add(candidate);
+            }
+
+            LogService.Info($"[URL_FILE] URLs válidas: {result.ValidCount}");
+            LogService.Info($"[URL_FILE] URLs inválidas: {result.InvalidCount}");
+
+            if (config == null || string.IsNullOrWhiteSpace(config.NewsFilePath))
+                throw new InvalidOperationException("O arquivo de notícias não está configurado.");
+
+            string filePath = Path.GetFullPath(config.NewsFilePath.Trim());
+            result.FilePath = filePath;
+            LogService.Info($"[URL_FILE] Arquivo configurado: {filePath}");
+
+            lock (_newsFileLock)
+            {
+                string directory = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+
+                var lines = File.Exists(filePath)
+                    ? File.ReadAllLines(filePath, new UTF8Encoding(false)).ToList()
+                    : new List<string>();
+
+                var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string line in lines)
+                {
+                    string existingUrl = (line ?? string.Empty).Trim();
+                    if (IsValidNewsFileUrl(existingUrl))
+                        existingKeys.Add(NormalizeCacheUrl(existingUrl));
+                }
+
+                LogService.Info($"[URL_FILE] URLs já existentes no arquivo: {existingKeys.Count}");
+
+                int lastDay = 0;
+                int lastMonth = 0;
+                bool hasLastDate = false;
+                for (int i = lines.Count - 1; i >= 0; i--)
+                {
+                    if (TryParseNewsDate(lines[i], out lastDay, out lastMonth))
+                    {
+                        hasLastDate = true;
+                        break;
+                    }
+                }
+
+                string today = DateTime.Now.ToString("dd/MM");
+                LogService.Info($"[URL_FILE] Última data encontrada: {(hasLastDate ? lastDay.ToString("00") + "/" + lastMonth.ToString("00") : "nenhuma")}");
+                LogService.Info($"[URL_FILE] Data atual: {today}");
+
+                var newUrls = inputUrls
+                    .Where(url => existingKeys.Add(NormalizeCacheUrl(url)))
+                    .ToList();
+                result.DuplicateCount += inputUrls.Count - newUrls.Count;
+
+                if (newUrls.Count == 0)
+                {
+                    LogService.Info("[URL_FILE] Nenhuma URL nova para adicionar");
+                    return result;
+                }
+
+                string existingText = string.Join(Environment.NewLine, lines).TrimEnd('\r', '\n');
+                string output;
+                if (hasLastDate && lastDay == DateTime.Now.Day && lastMonth == DateTime.Now.Month)
+                {
+                    LogService.Info("[URL_FILE] Bloco de hoje já existe; adicionando ao final");
+                    output = (existingText.Length == 0 ? string.Empty : existingText + Environment.NewLine)
+                             + string.Join(Environment.NewLine, newUrls);
+                }
+                else
+                {
+                    LogService.Info($"[URL_FILE] Criando novo bloco para {today}");
+                    string newBlock = today + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, newUrls);
+                    output = existingText.Length == 0 ? newBlock : existingText + Environment.NewLine + Environment.NewLine + newBlock;
+                }
+
+                File.WriteAllText(filePath, output + Environment.NewLine, new UTF8Encoding(false));
+                result.AddedCount = newUrls.Count;
+                result.DateBlock = today;
+                LogService.Info($"[URL_FILE] URLs adicionadas: {result.AddedCount}");
+                LogService.Info($"[URL_FILE] Duplicadas ignoradas: {result.DuplicateCount}");
+                LogService.Info("[URL_FILE] Arquivo atualizado com sucesso");
+            }
+
+            return result;
+        }
         private List<string> LoadUrlsFromSource(AppConfig config)
         {
             List<string> urls = new List<string>();
@@ -2088,10 +2229,23 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 Name = CopyScrapColumnName,
                 HeaderText = "",
-                Text = "ðŸ“‹",
+                Text = "Copiar scrap",
                 Width = 44,
                 UseColumnTextForButtonValue = true,
                 ToolTipText = "Copiar scrap"
+            });
+
+            dgvTopicResults.Columns.Add(new DataGridViewButtonColumn
+            {
+                Name = "colAlreadyPosted",
+                HeaderText = "J\u00E1 postada",
+                Text = "J\u00E1 postada",
+                UseColumnTextForButtonValue = false,
+                Width = 95,
+                MinimumWidth = 90,
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+                ReadOnly = true,
+                Visible = true
             });
 
             // EstÃ©tica adicional
@@ -2100,8 +2254,77 @@ namespace NewsImpactRanker.WinForms.Forms
             dgvTopicResults.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240); // Linhas alternadas para facilitar leitura
 
             dgvTopicResults.DataSource = results;
+            EnsureAlreadyPostedColumn();
         }        
 
+        private void EnsureAlreadyPostedColumn()
+        {
+            DataGridView grid = dgvTopicResults;
+            if (grid == null) return;
+
+            DataGridViewColumn column = grid.Columns.Cast<DataGridViewColumn>()
+                .FirstOrDefault(c => c.Name == "colAlreadyPosted");
+            if (column == null)
+            {
+                column = new DataGridViewButtonColumn
+                {
+                    Name = "colAlreadyPosted",
+                    HeaderText = "J\u00E1 postada",
+                    Text = "J\u00E1 postada",
+                    UseColumnTextForButtonValue = false,
+                    Width = 95,
+                    MinimumWidth = 90,
+                    AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+                    ReadOnly = true,
+                    Visible = true
+                };
+                grid.Columns.Add(column);
+                LogService.Info("[UI] colAlreadyPosted criada em runtime");
+            }
+
+            column.Visible = true;
+            column.Width = 95;
+            column.MinimumWidth = 90;
+            column.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            column.ReadOnly = true;
+            column.DisplayIndex = grid.Columns.Count - 1;
+
+            int filledRows = 0;
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                string url = row.Cells[TopicUrlColumnName].Value?.ToString();
+                if (string.IsNullOrWhiteSpace(url)) continue;
+                row.Cells["colAlreadyPosted"].Value = PostedUrlsManager.Contains(url) ? "Postada" : "J\u00E1 postada";
+                filledRows++;
+            }
+
+            LogService.Info($"[UI] Grid real: {grid.Name}");
+            LogService.Info($"[UI] Total de colunas: {grid.Columns.Count}");
+            LogService.Info("[UI] colAlreadyPosted existe: sim");
+            LogService.Info($"[UI] colAlreadyPosted visível: {column.Visible}");
+            LogService.Info($"[UI] DisplayIndex: {column.DisplayIndex}");
+            LogService.Info($"[UI] Width: {column.Width}");
+            LogService.Info($"[UI] Linhas com botão preenchido: {filledRows}");
+        }
+
+        private bool HandleTopicNormalUrlAction(DataGridViewRow row, string url)
+        {
+            try
+            {
+                Clipboard.SetText(url);
+                MarkTopicResultAsHandled(url);
+                row.DefaultCellStyle.BackColor = Color.FromArgb(204, 120, 0);
+                row.DefaultCellStyle.ForeColor = Color.White;
+                ShowTopicGridFeedback(row, row.Cells[TopicUrlColumnName].ColumnIndex, "URL");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("Erro ao executar procedimento normal da URL do ranking", ex);
+                return false;
+            }
+        }
         private async void dgvTopicResults_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
@@ -2124,6 +2347,34 @@ namespace NewsImpactRanker.WinForms.Forms
                     return;
                 }
 
+                if (columnName == "colAlreadyPosted")
+                {
+                    LogService.Info($"[POSTED_URLS] Botão Já postada acionado para: {url}");
+                    if (PostedUrlsManager.Contains(url))
+                    {
+                        MessageBox.Show("Esta notícia já está registrada como postada.", "Já postada", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        row.Cells["colAlreadyPosted"].Value = "Postada";
+                        return;
+                    }
+
+                    if (MessageBox.Show("Marcar esta notícia como já postada?", "Confirmar notícia postada", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                        return;
+
+                    LogService.Info("[POSTED_URLS] Executando procedimento normal da URL");
+                    if (!HandleTopicNormalUrlAction(row, url)) return;
+                    LogService.Info("[POSTED_URLS] Procedimento normal concluído");
+
+                    string error;
+                    string provider = StorageManager.LoadConfig().SelectedProvider.ToString();
+                    if (!PostedUrlsManager.Add(url, string.Empty, provider, out error))
+                    {
+                        MessageBox.Show(error ?? "Não foi possível registrar a URL como postada.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    row.Cells["colAlreadyPosted"].Value = "Postada";
+                    return;
+                }
                 if (columnName == CopyScrapColumnName)
                 {
                     string scrapText = await GetOrFetchScrapTextAsync(url);
@@ -2474,6 +2725,7 @@ namespace NewsImpactRanker.WinForms.Forms
             LoadLastResults();
             LoadEvaluatedCache();
             _summaryCache = SummaryCacheManager.LoadCache();
+            PostedUrlsManager.Load();
             UpdateCostLabel();
         }
 
@@ -2554,5 +2806,7 @@ namespace NewsImpactRanker.WinForms.Forms
     }
 
 }
+
+
 
 

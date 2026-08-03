@@ -23,6 +23,8 @@ namespace NewsImpactRanker.WinForms.Forms
             this.txtUrls = new System.Windows.Forms.TextBox();
             this.btnStart = new System.Windows.Forms.Button();
             this.btnConfig = new System.Windows.Forms.Button();
+            this.btnSummaryCache = new System.Windows.Forms.Button();
+            this.btnViewPostedUrls = new System.Windows.Forms.Button();
             this.progressBar = new System.Windows.Forms.ProgressBar();
             this.lblProgress = new System.Windows.Forms.Label();
             this.dgvResults = new System.Windows.Forms.DataGridView();
@@ -33,6 +35,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colReason = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colStatus = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colDate = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colAlreadyPosted = new System.Windows.Forms.DataGridViewButtonColumn();
             this.btnOpenReport = new System.Windows.Forms.Button();
             this.btnOpenLog = new System.Windows.Forms.Button();
             this.dgvTopicResults = new System.Windows.Forms.DataGridView();
@@ -84,9 +87,29 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btnConfig.Name = "btnConfig";
             this.btnConfig.Size = new System.Drawing.Size(100, 23);
             this.btnConfig.TabIndex = 5;
-            this.btnConfig.Text = "Configurações";
+            this.btnConfig.Text = "ConfiguraÃ§Ãµes";
             this.btnConfig.UseVisualStyleBackColor = true;
             this.btnConfig.Click += new System.EventHandler(this.btnConfig_Click);
+            // 
+            // btnSummaryCache
+            // 
+            this.btnSummaryCache.Location = new System.Drawing.Point(424, 128);
+            this.btnSummaryCache.Name = "btnSummaryCache";
+            this.btnSummaryCache.Size = new System.Drawing.Size(160, 25);
+            this.btnSummaryCache.TabIndex = 1004;
+            this.btnSummaryCache.Text = "Ver cache de resumos";
+            this.btnSummaryCache.UseVisualStyleBackColor = true;
+            this.btnSummaryCache.Click += new System.EventHandler(this.btnSummaryCache_Click);
+            // 
+            // btnViewPostedUrls
+            // 
+            this.btnViewPostedUrls.Location = new System.Drawing.Point(590, 127);
+            this.btnViewPostedUrls.Name = "btnViewPostedUrls";
+            this.btnViewPostedUrls.Size = new System.Drawing.Size(160, 25);
+            this.btnViewPostedUrls.TabIndex = 1005;
+            this.btnViewPostedUrls.Text = "Ver URLs já postadas";
+            this.btnViewPostedUrls.UseVisualStyleBackColor = true;
+            this.btnViewPostedUrls.Click += new System.EventHandler(this.btnViewPostedUrls_Click);
             // 
             // progressBar
             // 
@@ -122,7 +145,8 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colCategory,
             this.colReason,
             this.colStatus,
-            this.colDate});
+            this.colDate,
+            this.colAlreadyPosted});
             this.dgvResults.Location = new System.Drawing.Point(12, 187);
             this.dgvResults.Name = "dgvResults";
             this.dgvResults.ReadOnly = true;
@@ -142,7 +166,7 @@ namespace NewsImpactRanker.WinForms.Forms
             // colTitle
             // 
             this.colTitle.AutoSizeMode = System.Windows.Forms.DataGridViewAutoSizeColumnMode.Fill;
-            this.colTitle.HeaderText = "Título";
+            this.colTitle.HeaderText = "TÃ­tulo";
             this.colTitle.Name = "colTitle";
             this.colTitle.ReadOnly = true;
             // 
@@ -179,6 +203,16 @@ namespace NewsImpactRanker.WinForms.Forms
             this.colDate.Name = "colDate";
             this.colDate.ReadOnly = true;
             this.colDate.Width = 120;
+            // 
+            // colAlreadyPosted
+            // 
+            this.colAlreadyPosted.AutoSizeMode = System.Windows.Forms.DataGridViewAutoSizeColumnMode.None;
+            this.colAlreadyPosted.HeaderText = "Já postada";
+            this.colAlreadyPosted.MinimumWidth = 90;
+            this.colAlreadyPosted.Name = "colAlreadyPosted";
+            this.colAlreadyPosted.ReadOnly = true;
+            this.colAlreadyPosted.Text = "Já postada";
+            this.colAlreadyPosted.Width = 95;
             // 
             // btnOpenReport
             // 
@@ -258,14 +292,13 @@ namespace NewsImpactRanker.WinForms.Forms
             this.btZeraCache.TabIndex = 1001;
             this.btZeraCache.Text = "Zerar o cache";
             this.btZeraCache.UseVisualStyleBackColor = true;
-            //this.btZeraCache.Click += new System.EventHandler(this.btZeraCache_Click);
             // 
             // lblTotalCost
             // 
             this.lblTotalCost.AutoSize = true;
             this.lblTotalCost.Location = new System.Drawing.Point(12, 586);
             this.lblTotalCost.Name = "lblTotalCost";
-            this.lblTotalCost.Size = new System.Drawing.Size(121, 13);
+            this.lblTotalCost.Size = new System.Drawing.Size(76, 13);
             this.lblTotalCost.TabIndex = 1002;
             this.lblTotalCost.Text = "Total: $0.0000";
             // 
@@ -284,6 +317,8 @@ namespace NewsImpactRanker.WinForms.Forms
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(1180, 620);
+            this.Controls.Add(this.btnViewPostedUrls);
+            this.Controls.Add(this.btnSummaryCache);
             this.Controls.Add(this.btZeraCache);
             this.Controls.Add(this.btnCopyCost);
             this.Controls.Add(this.lblTotalCost);
@@ -301,7 +336,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "NewsImpactRanker - Classificador de Impacto de Notícias";
+            this.Text = "NewsImpactRanker - Classificador de Impacto de NotÃ­cias";
             this.Load += new System.EventHandler(this.MainForm_Load);
             ((System.ComponentModel.ISupportInitialize)(this.dgvResults)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.dgvTopicResults)).EndInit();
@@ -314,6 +349,8 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.TextBox txtUrls;
         private System.Windows.Forms.Button btnStart;
         private System.Windows.Forms.Button btnConfig;
+        private System.Windows.Forms.Button btnSummaryCache;
+        private System.Windows.Forms.Button btnViewPostedUrls;
         private System.Windows.Forms.ProgressBar progressBar;
         private System.Windows.Forms.Label lblProgress;
         private System.Windows.Forms.DataGridView dgvResults;
@@ -324,6 +361,7 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.DataGridViewTextBoxColumn colReason;
         private System.Windows.Forms.DataGridViewTextBoxColumn colStatus;
         private System.Windows.Forms.DataGridViewTextBoxColumn colDate;
+        private System.Windows.Forms.DataGridViewButtonColumn colAlreadyPosted;
         private System.Windows.Forms.Button btnOpenReport;
         private System.Windows.Forms.Button btnOpenLog;
 
@@ -337,3 +375,5 @@ namespace NewsImpactRanker.WinForms.Forms
         private Button btnCopyCost;
     }
 }
+
+

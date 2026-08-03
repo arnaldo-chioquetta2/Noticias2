@@ -72,11 +72,18 @@
     <Compile Include="Forms\ConfigForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Forms\PostedUrlsViewerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\SummaryCacheViewerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\ConfigForm.Designer.cs">
       <DependentUpon>ConfigForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Models\AiClassificationResponse.cs" />
     <Compile Include="Models\NewsItem.cs" />
+    <Compile Include="Models\PostedUrlItem.cs" />
     <Compile Include="Models\AppConfig.cs" />
     <Compile Include="Models\GeminiResponse.cs" />
     <Compile Include="Models\NewsScoreResult.cs" />
@@ -92,7 +99,6 @@
     <Compile Include="Services\AiResponseParser.cs" />
     <Compile Include="Services\DeepSeekService.cs" />
     <Compile Include="Services\CostManager.cs" />
-
     <Compile Include="Services\MistralService.cs" />
     <Compile Include="Services\KimiService.cs" />
     <Compile Include="Services\AiRouterService.cs" />
@@ -103,7 +109,9 @@
     <Compile Include="Services\ServiceResult.cs" />
     <Compile Include="Services\TokenUsageService.cs.cs" />
     <Compile Include="Storage\StorageManager.cs" />
+    <Compile Include="Storage\PostedUrlsManager.cs" />
     <Compile Include="Utils\SummaryCacheManager.cs" />
+    <Compile Include="Utils\CanonicalSummaryMatcher.cs" />
     <Compile Include="Utils\UrlValidator.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
