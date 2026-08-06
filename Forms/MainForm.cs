@@ -113,6 +113,8 @@ namespace NewsImpactRanker.WinForms.Forms
         private int _iaErrorCount = 0;
         private int _scrapErrorCount = 0;
         private int _cacheHitCount = 0;
+        private int _alreadyPostedSkippedCount = 0;
+        private HashSet<string> _postedUrlsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // CronÃ´metro para saber atÃ© que horas o Groq deve ficar "de castigo"
         private DateTime _groqCooldownUntil = DateTime.MinValue;
 
@@ -141,12 +143,37 @@ namespace NewsImpactRanker.WinForms.Forms
             ApplyVersionToCaption();
             LogService.WriteApplicationHeader();
             LogApplicationIdentity();
-            LoadLastResults();
+            LoadPostedUrlsFilter();
             LoadEvaluatedCache();
             _summaryCache = SummaryCacheManager.LoadCache();
 
         }
 
+        private void LoadPostedUrlsFilter()
+        {
+            var records = PostedUrlsManager.Load();
+            _postedUrlsSet = new HashSet<string>(records
+                .Select(item => NormalizeCacheUrl(string.IsNullOrWhiteSpace(item.NormalizedUrl) ? item.Url : item.NormalizedUrl))
+                .Where(url => !string.IsNullOrWhiteSpace(url)), StringComparer.OrdinalIgnoreCase);
+            LogService.Info($"[POSTED_FILTER] Arquivo: {PostedUrlsManager.GetFilePath()}");
+            LogService.Info($"[POSTED_FILTER] URLs postadas carregadas: {_postedUrlsSet.Count}");
+        }
+
+        private bool IsAlreadyPosted(string url)
+        {
+            string normalized = NormalizeCacheUrl(url);
+            return !string.IsNullOrWhiteSpace(normalized) && _postedUrlsSet.Contains(normalized);
+        }
+
+        private void RebuildRankingAfterPosted()
+        {
+            LogService.Info("[POSTED_FILTER] Recalculando ranking");
+            List<TopicResult> topicResults = SelectBestNewsPerTopic(9);
+            _currentTopicResults = topicResults;
+            SaveLastResults(_currentTopicResults);
+            DisplayTopicResults(_currentTopicResults.Where(item => !item.IsClicked && IsConfiguredTopicEnabled(item.Topic) && !IsAlreadyPosted(item.Url)).ToList());
+            LogService.Info("[POSTED_FILTER] Linha removida da grid");
+        }
         private void LoadEvaluatedCache()
         {
             try
@@ -397,6 +424,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
             // Reseta logs e contadores globais
             LogService.ResetLog();
+            LogEnabledTopics(config);
             CostManager.Reset();
             _successCount = 0;
             _iaErrorCount = 0;
@@ -435,6 +463,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 AppendUrlsResult appendResult = AppendTxtUrlsToConfiguredFile(config);
                 if (appendResult.AddedCount > 0)
                     txtUrls.Clear();
+
+                CleanupOldNewsBlocks(config.NewsFilePath, DateTime.Today);
             }
             catch (Exception ex)
             {
@@ -616,9 +646,15 @@ namespace NewsImpactRanker.WinForms.Forms
             UpdateInfoLabel(GetFormattedStatus("Processamento finalizado!"));
         }
 
+
         private async Task ProcessSingleUrlAsync(string url)
         {
             string normalizedUrl = NormalizeCacheUrl(url);
+            if (IsAlreadyPosted(url))
+            {
+                LogService.Info($"[POSTED_FILTER] URL já postada; processamento ignorado: {url}");
+                return;
+            }
             LogService.Info($"[CACHE] Consultando: {normalizedUrl}");
 
             if (TryGetEvaluatedCache(url, out var cachedItem, out bool legacy))
@@ -746,6 +782,7 @@ namespace NewsImpactRanker.WinForms.Forms
                 _iaErrorCount++;
             }
         }
+
 
         private string LoadPrompt(AppConfig config)
         {
@@ -1213,6 +1250,7 @@ namespace NewsImpactRanker.WinForms.Forms
             }
 
             // OrdenaÃ§Ã£o: AlfabÃ©tica por TÃ³pico e depois maior Score no topo
+            partialResults = partialResults.Where(r => IsConfiguredTopicEnabled(r.Topic) && !IsAlreadyPosted(r.Url)).ToList();
             partialResults = partialResults
                 .OrderBy(r => r.Topic)
                 .ThenByDescending(r => r.Score)
@@ -1233,7 +1271,7 @@ namespace NewsImpactRanker.WinForms.Forms
             SaveLastResults();
 
             // 6. Atualiza a Grid (apenas o que nÃ£o foi lido)
-            var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked).ToList();
+            var itensParaMostrar = _currentTopicResults.Where(r => !r.IsClicked && IsConfiguredTopicEnabled(r.Topic) && !IsAlreadyPosted(r.Url)).ToList();
             DisplayTopicResults(itensParaMostrar);
 
             if (!fromCache)
@@ -1338,7 +1376,8 @@ namespace NewsImpactRanker.WinForms.Forms
             lines.Add("===== TÃ“PICOS MONITORADOS =====");
             if (_allNewsScores.Any())
             {
-                var allTopics = _allNewsScores.First().Scores.Keys.OrderBy(t => t).ToList();
+                HashSet<string> enabledTopicCodes = GetEnabledTopicCodes(StorageManager.LoadConfig());
+                var allTopics = _allNewsScores.First().Scores.Keys.Where(enabledTopicCodes.Contains).OrderBy(t => t).ToList();
                 foreach (var topicName in allTopics)
                 {
                     int count = _allNewsScores.Count(n => n.Scores.ContainsKey(topicName) && n.Scores[topicName] > 0);
@@ -1354,6 +1393,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
         private void AddRankingSection(List<string> lines, List<TopicResult> results)
         {
+            results = results.Where(r => IsConfiguredTopicEnabled(r.Topic)).ToList();
             lines.Add("===== MELHORES POR ASSUNTO (RANKING) =====");
             lines.Add("");
 
@@ -1392,6 +1432,7 @@ namespace NewsImpactRanker.WinForms.Forms
             lines.Add($"- Processados pelo Gemini       : {_geminiSuccessCount}");
             lines.Add($"- Processados pelo Mistral      : {_mistralSuccessCount}");
             lines.Add($"Resumos canÃ´nicos gerados       : {_resumosCanonicosGerados}");
+            lines.Add($"URLs já postadas ignoradas          : {_alreadyPostedSkippedCount}");
             lines.Add($"Duplicatas detectadas           : {_duplicatasPorResumo}");
             lines.Add($"AvaliaÃ§Ãµes completas evitadas   : {_avaliacoesCompletasEvitadas}");
             lines.Add($"AvaliaÃ§Ãµes completas executadas : {_avaliacoesCompletasExecutadas}");
@@ -1764,7 +1805,7 @@ namespace NewsImpactRanker.WinForms.Forms
             {
                 MessageBox.Show("Esta URL já estava marcada como postada.", "Já postada", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 row.Cells["colAlreadyPosted"].Value = "Postada";
-                return;
+                    return;
             }
 
             if (MessageBox.Show(
@@ -2052,6 +2093,156 @@ namespace NewsImpactRanker.WinForms.Forms
 
             return result;
         }
+        private sealed class NewsFileCleanupResult
+        {
+            public int TotalBlocks { get; set; }
+            public int RemovedBlocks { get; set; }
+            public int KeptBlocks { get; set; }
+            public int RemovedUrls { get; set; }
+            public int KeptUrls { get; set; }
+            public string FilePath { get; set; }
+        }
+
+        private sealed class NewsDateBlock
+        {
+            public string DateLabel { get; set; }
+            public DateTime ParsedDate { get; set; }
+            public List<string> Lines { get; } = new List<string>();
+        }
+
+        private NewsFileCleanupResult CleanupOldNewsBlocks(string filePath, DateTime referenceDate)
+        {
+            var result = new NewsFileCleanupResult { FilePath = filePath };
+            string fullPath = Path.GetFullPath((filePath ?? string.Empty).Trim());
+            LogService.Info($"[NEWS_CLEANUP] Arquivo: {fullPath}");
+            LogService.Info($"[NEWS_CLEANUP] Data de referencia: {referenceDate:dd/MM/yyyy}");
+            LogService.Info("[NEWS_CLEANUP] Limite: 30 dias");
+
+            lock (_newsFileLock)
+            {
+                if (!File.Exists(fullPath))
+                {
+                    LogService.Info("[NEWS_CLEANUP] Arquivo nao existe; nenhuma limpeza necessaria");
+                    return result;
+                }
+
+                string[] sourceLines = File.ReadAllLines(fullPath, new UTF8Encoding(false));
+                var blocks = new List<NewsDateBlock>();
+                var preamble = new List<string>();
+                NewsDateBlock current = null;
+
+                foreach (string rawLine in sourceLines)
+                {
+                    string line = rawLine ?? string.Empty;
+                    int day;
+                    int month;
+                    if (TryParseNewsDate(line, out day, out month))
+                    {
+                        DateTime parsedDate = InferNewsBlockDate(day, month, referenceDate);
+                        current = new NewsDateBlock
+                        {
+                            DateLabel = line.Trim(),
+                            ParsedDate = parsedDate
+                        };
+                        blocks.Add(current);
+                        continue;
+                    }
+
+                    if (current == null)
+                    {
+                        if (!string.IsNullOrWhiteSpace(line))
+                            preamble.Add(line.Trim());
+                    }
+                    else
+                    {
+                        current.Lines.Add(line);
+                    }
+                }
+
+                result.TotalBlocks = blocks.Count;
+                LogService.Info($"[NEWS_CLEANUP] Blocos encontrados: {result.TotalBlocks}");
+                var keptBlocks = new List<NewsDateBlock>();
+                foreach (NewsDateBlock block in blocks)
+                {
+                    int urlCount = block.Lines.Count(IsValidNewsFileUrl);
+                    double age = (referenceDate.Date - block.ParsedDate.Date).TotalDays;
+                    if (age > 30)
+                    {
+                        result.RemovedBlocks++;
+                        result.RemovedUrls += urlCount;
+                        LogService.Info($"[NEWS_CLEANUP] Removendo bloco: {block.DateLabel}");
+                        LogService.Info($"[NEWS_CLEANUP] Data inferida: {block.ParsedDate:dd/MM/yyyy}");
+                        LogService.Info($"[NEWS_CLEANUP] Idade: {age:0} dias");
+                        LogService.Info($"[NEWS_CLEANUP] URLs removidas: {urlCount}");
+                    }
+                    else
+                    {
+                        if (age < 0)
+                            LogService.Warn($"[NEWS_CLEANUP] Data futura inesperada: {block.DateLabel} ({block.ParsedDate:dd/MM/yyyy})");
+                        result.KeptBlocks++;
+                        result.KeptUrls += urlCount;
+                        keptBlocks.Add(block);
+                        LogService.Info($"[NEWS_CLEANUP] Mantendo bloco: {block.DateLabel}");
+                        LogService.Info($"[NEWS_CLEANUP] Idade: {age:0} dias");
+                        LogService.Info($"[NEWS_CLEANUP] URLs mantidas: {urlCount}");
+                    }
+                }
+
+                if (result.RemovedBlocks == 0)
+                {
+                    LogService.Info("[NEWS_CLEANUP] Nenhum bloco antigo para remover");
+                    return result;
+                }
+
+                var outputLines = new List<string>();
+                outputLines.AddRange(preamble.Where(line => !string.IsNullOrWhiteSpace(line)));
+                foreach (NewsDateBlock block in keptBlocks)
+                {
+                    if (outputLines.Count > 0)
+                        outputLines.Add(string.Empty);
+                    outputLines.Add(block.DateLabel);
+                    outputLines.Add(string.Empty);
+                    outputLines.AddRange(block.Lines.Where(line => !string.IsNullOrWhiteSpace(line)).Select(line => line.Trim()));
+                }
+
+                string cleanedContent = string.Join(Environment.NewLine, outputLines).Trim();
+                string tempPath = fullPath + ".tmp";
+                string backupPath = fullPath + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".bak";
+                try
+                {
+                    File.WriteAllText(tempPath, cleanedContent, new UTF8Encoding(false));
+                    if (File.Exists(fullPath))
+                        File.Replace(tempPath, fullPath, backupPath, true);
+                    else
+                        File.Move(tempPath, fullPath);
+                }
+                catch
+                {
+                    if (File.Exists(tempPath))
+                        File.Delete(tempPath);
+                    throw;
+                }
+
+                if (result.RemovedBlocks == blocks.Count)
+                    LogService.Info("[NEWS_CLEANUP] Todos os blocos foram removidos");
+                LogService.Info($"[NEWS_CLEANUP] Blocos removidos: {result.RemovedBlocks}");
+                LogService.Info($"[NEWS_CLEANUP] URLs removidas: {result.RemovedUrls}");
+                LogService.Info($"[NEWS_CLEANUP] Blocos mantidos: {result.KeptBlocks}");
+                LogService.Info($"[NEWS_CLEANUP] URLs mantidas: {result.KeptUrls}");
+                LogService.Info("[NEWS_CLEANUP] Arquivo atualizado com sucesso");
+            }
+
+            return result;
+        }
+
+        private static DateTime InferNewsBlockDate(int day, int month, DateTime referenceDate)
+        {
+            int year = referenceDate.Year;
+            DateTime candidate = new DateTime(year, month, day);
+            if (candidate.Date > referenceDate.Date)
+                candidate = candidate.AddYears(-1);
+            return candidate.Date;
+        }
         private List<string> LoadUrlsFromSource(AppConfig config)
         {
             List<string> urls = new List<string>();
@@ -2092,6 +2283,35 @@ namespace NewsImpactRanker.WinForms.Forms
             return urls;
         }
 
+        private static HashSet<string> GetEnabledTopicCodes(AppConfig config)
+        {
+            if (config == null || config.EnabledTopicCodes == null)
+                return new HashSet<string>(TopicCatalog.Codes, StringComparer.OrdinalIgnoreCase);
+
+            return new HashSet<string>(config.EnabledTopicCodes
+                .Where(code => TopicCatalog.CodeToName.ContainsKey(code))
+                .Select(code => code.ToUpperInvariant()), StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static bool IsTopicEnabled(string topicName, HashSet<string> enabledCodes)
+        {
+            string code = TopicCatalog.CodeToName
+                .FirstOrDefault(pair => string.Equals(pair.Value, topicName, StringComparison.OrdinalIgnoreCase)).Key;
+            return !string.IsNullOrWhiteSpace(code) && enabledCodes.Contains(code);
+        }
+
+        private void LogEnabledTopics(AppConfig config)
+        {
+            HashSet<string> enabled = GetEnabledTopicCodes(config);
+            string codes = string.Join(",", TopicCatalog.Codes.Where(enabled.Contains));
+            LogService.Info($"[TOPICS] Categorias habilitadas: {enabled.Count}/{TopicCatalog.Codes.Length}");
+            LogService.Info($"[TOPICS] Siglas habilitadas: {codes}");
+        }
+        private bool IsConfiguredTopicEnabled(string topicName)
+        {
+            return IsTopicEnabled(topicName, GetEnabledTopicCodes(StorageManager.LoadConfig()));
+        }
+
         private List<TopicResult> SelectBestNewsPerTopic(int minimumScore)
         {
             var topicResults = new List<TopicResult>();
@@ -2100,19 +2320,28 @@ namespace NewsImpactRanker.WinForms.Forms
             var usedNewsUrls = new HashSet<string>();
 
             // 1. Navegamos pelos cÃ³digos oficiais do seu TopicCatalog
-            foreach (var sigla in TopicCatalog.Codes)
+            HashSet<string> enabledTopicCodes = GetEnabledTopicCodes(StorageManager.LoadConfig());
+            foreach (var sigla in TopicCatalog.Codes.Where(enabledTopicCodes.Contains))
             {
                 // O valor recebido Ã© a meta ideal; ele nÃ£o elimina candidatas.
-                var eligibleNews = _allNewsScores
+                var candidatesBeforePostedFilter = _allNewsScores
                     .Where(n => n.Scores != null && n.Scores.ContainsKey(sigla) && n.Scores[sigla] > 0)
+                    .ToList();
+                var eligibleNews = candidatesBeforePostedFilter
+                    .Where(n => !IsAlreadyPosted(n.Url))
                     .Where(n => !usedNewsUrls.Contains(n.Url))
                     .ToList();
+                int postedRemoved = candidatesBeforePostedFilter.Count(n => IsAlreadyPosted(n.Url));
 
                 string nomeCompleto = TopicCatalog.CodeToName.ContainsKey(sigla)
                                       ? TopicCatalog.CodeToName[sigla]
                                       : sigla;
                 LogService.Info($"[RANKING] Categoria: {nomeCompleto}");
                 LogService.Info($"[RANKING] Candidatas avaliadas: {eligibleNews.Count}");
+                LogService.Info($"[POSTED_FILTER] Categoria: {nomeCompleto}");
+                LogService.Info($"[POSTED_FILTER] Candidatas antes do filtro: {candidatesBeforePostedFilter.Count}");
+                LogService.Info($"[POSTED_FILTER] Candidatas já postadas removidas: {postedRemoved}");
+                LogService.Info($"[POSTED_FILTER] Candidatas restantes: {eligibleNews.Count}");
                 LogService.Info($"[RANKING] PontuaÃ§Ã£o ideal: {minimumScore}");
 
                 if (eligibleNews.Any())
@@ -2170,6 +2399,8 @@ namespace NewsImpactRanker.WinForms.Forms
 
             // 1. ConfiguraÃ§Ãµes de Fonte e Estilo
             // VocÃª pode alterar o "12" para o tamanho que desejar (ex: 11, 14, etc)
+            HashSet<string> enabledTopicCodes = GetEnabledTopicCodes(StorageManager.LoadConfig());
+            results = results.Where(item => IsTopicEnabled(item.Topic, enabledTopicCodes) && !IsAlreadyPosted(item.Url)).ToList();
             Font fonteTexto = new Font("Segoe UI", 12f, FontStyle.Regular);
             Font fonteCabecalho = new Font("Segoe UI", 11f, FontStyle.Bold);
 
@@ -2354,7 +2585,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     {
                         MessageBox.Show("Esta notícia já está registrada como postada.", "Já postada", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         row.Cells["colAlreadyPosted"].Value = "Postada";
-                        return;
+                    return;
                     }
 
                     if (MessageBox.Show("Marcar esta notícia como já postada?", "Confirmar notícia postada", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -2373,6 +2604,9 @@ namespace NewsImpactRanker.WinForms.Forms
                     }
 
                     row.Cells["colAlreadyPosted"].Value = "Postada";
+                                        _postedUrlsSet.Add(NormalizeCacheUrl(url));
+                    LogService.Info($"[POSTED_FILTER] URL marcada como postada: {url}");
+                    RebuildRankingAfterPosted();
                     return;
                 }
                 if (columnName == CopyScrapColumnName)
@@ -2665,12 +2899,12 @@ namespace NewsImpactRanker.WinForms.Forms
         {
             var mergedByUrl = new Dictionary<string, TopicResult>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var item in ReadLastResults().Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url)))
+            foreach (var item in ReadLastResults().Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url) && IsConfiguredTopicEnabled(r.Topic) && !IsAlreadyPosted(r.Url)))
             {
                 mergedByUrl[item.Url] = item;
             }
 
-            foreach (var item in newResults.Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url)))
+            foreach (var item in newResults.Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url) && IsConfiguredTopicEnabled(r.Topic) && !IsAlreadyPosted(r.Url)))
             {
                 mergedByUrl[item.Url] = item;
             }
@@ -2687,7 +2921,7 @@ namespace NewsImpactRanker.WinForms.Forms
             try
             {
                 _currentTopicResults = ReadLastResults()
-                    .Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url))
+                    .Where(r => !r.IsClicked && !string.IsNullOrWhiteSpace(r.Url) && IsConfiguredTopicEnabled(r.Topic) && !IsAlreadyPosted(r.Url))
                     .ToList();
 
                 if (_currentTopicResults.Any())
@@ -2702,7 +2936,7 @@ namespace NewsImpactRanker.WinForms.Forms
                     var allResults = JsonConvert.DeserializeObject<List<TopicResult>>(json) ?? new List<TopicResult>();
 
                     // Filtra pegando APENAS os que NÃƒO foram clicados
-                    _currentTopicResults = allResults.Where(r => !r.IsClicked).ToList();
+                    _currentTopicResults = allResults.Where(r => !r.IsClicked && IsConfiguredTopicEnabled(r.Topic) && !IsAlreadyPosted(r.Url)).ToList();
 
                     // Mostra na Grid se tiver algum sobrando
                     if (_currentTopicResults.Any())

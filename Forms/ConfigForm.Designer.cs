@@ -50,6 +50,11 @@ namespace NewsImpactRanker.WinForms.Forms
             this.tabDeepSeek = new System.Windows.Forms.TabPage();
             this.tabMistral = new System.Windows.Forms.TabPage();
             this.tabKimi = new System.Windows.Forms.TabPage();
+            this.tabCategorias = new System.Windows.Forms.TabPage();
+            this.clbTopics = new System.Windows.Forms.CheckedListBox();
+            this.btnMarkAllTopics = new System.Windows.Forms.Button();
+            this.btnUnmarkAllTopics = new System.Windows.Forms.Button();
+            this.lblTopicCount = new System.Windows.Forms.Label();
             this.labelGeminiModel = new System.Windows.Forms.Label();
             this.txtGeminiModel = new System.Windows.Forms.TextBox();
             ((System.ComponentModel.ISupportInitialize)(this.nudSummaryWordCount)).BeginInit();
@@ -358,7 +363,7 @@ namespace NewsImpactRanker.WinForms.Forms
             this.tabConfig.Padding = new System.Drawing.Point(12, 5);
             this.tabConfig.Controls.AddRange(new System.Windows.Forms.Control[] {
                 this.tabGeral, this.tabGroq, this.tabGemini,
-                this.tabDeepSeek, this.tabMistral, this.tabKimi
+                this.tabDeepSeek, this.tabMistral, this.tabKimi, this.tabCategorias
             });
 
             ConfigurePage(this.tabGeral, "Geral");
@@ -370,6 +375,7 @@ namespace NewsImpactRanker.WinForms.Forms
 
             ConfigureGeneralTab();
             ConfigureProviderTabs();
+            ConfigureCategoriesTab();
             this.Controls.Add(this.tabConfig);
             this.tabConfig.BringToFront();
         }
@@ -417,6 +423,49 @@ namespace NewsImpactRanker.WinForms.Forms
             AddProviderField(this.tabMistral, this.labelMistralModel, this.txtMistralModel, "Modelo", 82);
         }
 
+        private void ConfigureCategoriesTab()
+        {
+            ConfigurePage(this.tabCategorias, "Categorias");
+            this.clbTopics.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.clbTopics.CheckOnClick = true;
+            this.clbTopics.HorizontalScrollbar = true;
+            this.clbTopics.Name = "clbTopics";
+            this.clbTopics.TabIndex = 0;
+            this.clbTopics.ItemCheck += new System.Windows.Forms.ItemCheckEventHandler(this.clbTopics_ItemCheck);
+            foreach (string code in NewsImpactRanker.WinForms.Models.TopicCatalog.Codes)
+            {
+                string name = NewsImpactRanker.WinForms.Models.TopicCatalog.CodeToName[code];
+                this.clbTopics.Items.Add(code + " - " + name, true);
+            }
+
+            this.btnMarkAllTopics.Location = new System.Drawing.Point(12, 205);
+            this.btnMarkAllTopics.Name = "btnMarkAllTopics";
+            this.btnMarkAllTopics.Size = new System.Drawing.Size(115, 28);
+            this.btnMarkAllTopics.TabIndex = 1;
+            this.btnMarkAllTopics.Text = "Marcar todas";
+            this.btnMarkAllTopics.UseVisualStyleBackColor = true;
+            this.btnMarkAllTopics.Click += new System.EventHandler(this.btnMarkAllTopics_Click);
+
+            this.btnUnmarkAllTopics.Location = new System.Drawing.Point(133, 205);
+            this.btnUnmarkAllTopics.Name = "btnUnmarkAllTopics";
+            this.btnUnmarkAllTopics.Size = new System.Drawing.Size(125, 28);
+            this.btnUnmarkAllTopics.TabIndex = 2;
+            this.btnUnmarkAllTopics.Text = "Desmarcar todas";
+            this.btnUnmarkAllTopics.UseVisualStyleBackColor = true;
+            this.btnUnmarkAllTopics.Click += new System.EventHandler(this.btnUnmarkAllTopics_Click);
+
+            this.lblTopicCount.AutoSize = true;
+            this.lblTopicCount.Location = new System.Drawing.Point(275, 212);
+            this.lblTopicCount.Name = "lblTopicCount";
+            this.lblTopicCount.Size = new System.Drawing.Size(110, 13);
+            this.lblTopicCount.TabIndex = 3;
+            this.lblTopicCount.Text = "Habilitadas: 26/26";
+
+            this.tabCategorias.Controls.Add(this.clbTopics);
+            this.tabCategorias.Controls.Add(this.btnMarkAllTopics);
+            this.tabCategorias.Controls.Add(this.btnUnmarkAllTopics);
+            this.tabCategorias.Controls.Add(this.lblTopicCount);
+        }
         private static void ConfigurePage(System.Windows.Forms.TabPage page, string text)
         {
             page.BackColor = System.Drawing.SystemColors.Control;
@@ -488,6 +537,11 @@ namespace NewsImpactRanker.WinForms.Forms
         private System.Windows.Forms.TabPage tabDeepSeek;
         private System.Windows.Forms.TabPage tabMistral;
         private System.Windows.Forms.TabPage tabKimi;
+        private System.Windows.Forms.TabPage tabCategorias;
+        private System.Windows.Forms.CheckedListBox clbTopics;
+        private System.Windows.Forms.Button btnMarkAllTopics;
+        private System.Windows.Forms.Button btnUnmarkAllTopics;
+        private System.Windows.Forms.Label lblTopicCount;
         private System.Windows.Forms.Label labelGeminiModel;
         private System.Windows.Forms.TextBox txtGeminiModel;
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 namespace NewsImpactRanker.WinForms.Models
 {
     public enum AiProvider { DeepSeek, Groq, Gemini, Mistral, Kimi }
@@ -23,6 +24,8 @@ namespace NewsImpactRanker.WinForms.Models
         public string PromptFilePath { get; set; }
         public string NewsFilePath { get; set; }
         public int SummaryWordCount { get; set; } = 10;
+        // Null identifica configuracoes antigas; nesse caso todos os topicos ficam habilitados.
+        public List<string> EnabledTopicCodes { get; set; }
         public string GroqModel { get; set; } = "llama-3.1-8b-instant";
         public string GeminiModel { get; set; } = "gemini-2.0-flash";
     }

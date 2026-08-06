@@ -4,6 +4,8 @@ using NewsImpactRanker.WinForms.Utils;
 using System;
 using System.Drawing;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace NewsImpactRanker.WinForms.Forms
@@ -128,10 +130,59 @@ namespace NewsImpactRanker.WinForms.Forms
             txtNewsFile.Text = config.NewsFilePath;
             txtPromptFile.Text = config.PromptFilePath;
             nudSummaryWordCount.Value = config.SummaryWordCount > 0 ? config.SummaryWordCount : 10;
+            LoadEnabledTopics(config);
 
             UpdateProviderFields();
         }
 
+        private void LoadEnabledTopics(AppConfig config)
+        {
+            bool enableAllForLegacy = config.EnabledTopicCodes == null;
+            var enabled = new HashSet<string>(config.EnabledTopicCodes == null ? TopicCatalog.Codes.ToList() : config.EnabledTopicCodes, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < clbTopics.Items.Count; i++)
+            {
+                string code = GetTopicCode(clbTopics.Items[i]);
+                clbTopics.SetItemChecked(i, enableAllForLegacy || enabled.Contains(code));
+            }
+            UpdateTopicCount();
+        }
+
+        private List<string> GetCheckedTopicCodes()
+        {
+            return clbTopics.CheckedItems.Cast<object>().Select(GetTopicCode).Where(code => !string.IsNullOrWhiteSpace(code)).ToList();
+        }
+
+        private static string GetTopicCode(object item)
+        {
+            string text = item == null ? string.Empty : item.ToString();
+            int separator = text.IndexOf(" - ", StringComparison.Ordinal);
+            return separator > 0 ? text.Substring(0, separator) : text.Trim();
+        }
+
+        private void UpdateTopicCount()
+        {
+            lblTopicCount.Text = $"Habilitadas: {clbTopics.CheckedItems.Count}/{clbTopics.Items.Count}";
+        }
+
+        private void btnMarkAllTopics_Click(object sender, EventArgs e)
+        {
+            for (int i = 0; i < clbTopics.Items.Count; i++) clbTopics.SetItemChecked(i, true);
+            UpdateTopicCount();
+        }
+
+        private void btnUnmarkAllTopics_Click(object sender, EventArgs e)
+        {
+            for (int i = 0; i < clbTopics.Items.Count; i++) clbTopics.SetItemChecked(i, false);
+            UpdateTopicCount();
+        }
+
+        private void clbTopics_ItemCheck(object sender, ItemCheckEventArgs e)
+        {
+            if (IsHandleCreated && !IsDisposed)
+                BeginInvoke(new Action(UpdateTopicCount));
+            else
+                UpdateTopicCount();
+        }
         private void btnSave_Click(object sender, EventArgs e)
         {
             int valorNaTela = (int)nudSummaryWordCount.Value;
@@ -155,7 +206,8 @@ namespace NewsImpactRanker.WinForms.Forms
                 PromptFilePath = txtPromptFile.Text.Trim(),
                 NewsFilePath = txtNewsFile.Text.Trim(),
                 SelectedProvider = (AiProvider)cmbProvider.SelectedItem,
-                SummaryWordCount = valorNaTela
+                SummaryWordCount = valorNaTela,
+                EnabledTopicCodes = GetCheckedTopicCodes()
             };
 
             StorageManager.SaveConfig(config);
